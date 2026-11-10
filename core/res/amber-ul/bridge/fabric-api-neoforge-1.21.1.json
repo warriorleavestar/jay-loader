@@ -1,0 +1,176 @@
+{
+  "_comment": "Phase 5 Fabric API bridge manifest (Fabric API 0.116.17 on NeoForge 21.1.x). Per module id + version (the part before +): veto = mixins whose job a NeoForge system or Amber's bridge does (they are not failures), strip = single injectors, skipEntrypoints = Fabric API init code that would fight NeoForge. See docs/fabric-api-bridge-design.md and docs/phase5-bridge-brief.md.",
+  "modules": {
+    "fabric-screen-handler-api-v1": {
+      "version": "1.3.91",
+      "package": "net.fabricmc.fabric.mixin.screenhandler",
+      "veto": ["ServerPlayerEntityMixin"],
+      "_notes": "NeoForge's openMenu writes client-side data into its own AdvancedOpenScreenPayload and the client calls MenuType.create(id, inv, buf): amber_fabric_bridge wraps an ExtendedScreenHandlerFactory so its opening data is written there with the type's packet codec (ServerPlayerOpenMenuMixin + ExtendedMenuProvider; shouldCloseCurrentScreen -> shouldTriggerClientSideContainerClosingOnOpen) and ExtendedScreenHandlerTypeMixin decodes it. Fabric's OpenScreenPayload is registered but never sent. NamedScreenHandlerFactoryMixin kept."
+    },
+    "fabric-loot-api-v3": {
+      "version": "1.0.3",
+      "_notes": "Verified as-is, nothing vetoed (2026-11-08 worldtest loot probe): MODIFY (pool added to blocks/dirt), REPLACE (blocks/gravel) and ALL_LOADED fire on NeoForge, sources are reported correctly (VANILLA / REPLACED), and a NeoForge LootTableLoadEvent pool on the same table lands next to Fabric's (dirt drops dirt + gold + diamond). fabric-loot-api-v2 delegates to v3."
+    },
+    "fabric-content-registries-v0": {
+      "version": "8.0.19",
+      "package": "net.fabricmc.fabric.mixin.content.registry",
+      "strip": [ { "mixin": "AbstractFurnaceBlockEntityMixin", "handler": "canUseAsFuelRedirect", "reason": "NeoForge's isFuel asks ItemStack.getBurnTime; amber_fabric_bridge answers Fabric fuels in FurnaceFuelBurnTimeEvent" },
+                 { "mixin": "AbstractFurnaceBlockEntityMixin", "handler": "getFuelTimeRedirect", "reason": "NeoForge's getBurnDuration asks ItemStack.getBurnTime (same bridge)" } ],
+      "_notes": "2026-11-08 worldtest content probe. NeoForge answers composting (player + villager), vibration frequencies and hero gifts only from data maps and never reads HoeItem.TILLABLES: amber_fabric_bridge's ContentBridge writes what changed in the vanilla tables since before the Fabric entrypoints into the data maps on every DataMapsUpdatedEvent, runs Fabric tilling actions from BlockToolModificationEvent(HOE_TILL) and answers fuel from FurnaceFuelBurnTimeEvent. Strip/flatten/oxidize/wax/flammable/brewing/villager food and pickup work as-is (NeoForge falls back to the vanilla tables)."
+    },
+    "fabric-transfer-api-v1": {
+      "version": "5.4.4",
+      "_notes": "Fabric's mixins all apply; what was missing is interop (2026-11-08 worldtest transfer probe: a Fabric-only Storage was invisible to NeoForge capabilities and the other way round). amber_fabric_bridge's TransferBridge connects ItemStorage/FluidStorage.SIDED with Capabilities.ItemHandler/FluidHandler.BLOCK both ways (81 droplets = 1 mB, transactions rolled back through a journal). Hopper mixins kept: NeoForge's hopper hooks run first and now see Fabric storages. Item-stack and entity capabilities not bridged yet."
+    },
+    "fabric-data-attachment-api-v1": {
+      "version": "1.4.7",
+      "_notes": "Verified as-is, nothing vetoed (2026-11-08 worldtest attach probe, two runs): persistent attachments on ServerLevel, player and chunk save and load (stored under fabric:attachments next to NeoForge's own neoforge:attachments), and syncWith reaches the client over fabric:accepted_attachments_v1 / the sync payloads."
+    },
+    "fabric-biome-api-v1": {
+      "version": "13.0.31",
+      "_notes": "Verified as-is, nothing vetoed (2026-11-08 worldtest biome probe): Fabric applies BiomeModifications to the Biome objects NeoForge serves from ModifiableBiomeInfo, and a NeoForge biome_modifier (add_spawns) on the same biome is kept alongside. The BiomeModifier re-base in brief 6.x is only needed if a later version stops mutating in place."
+    },
+    "fabric-model-loading-api-v1": {
+      "version": "2.1.0",
+      "_notes": "Verified as-is, nothing vetoed (2026-11-09 worldtest model probe, Fabric 13/13, NeoForge 13/13): addModels, resolveModel, registerBlockStateResolver, modifyModelOnLoad and modifyModelAfterBake all reach the baked models NeoForge uses. The one failing injector (ModelLoaderBakerImplMixin.wrapInnerBake) is repaired by the bake-time MixinFixer; the ModelEvent re-base in the design is not needed."
+    },
+    "fabric-entity-events-v1": {
+      "version": "1.8.0",
+      "package": "net.fabricmc.fabric.mixin.entity.event",
+      "strip": [
+        { "mixin": "LivingEntityMixin", "handler": "modifyBedForOccupiedState", "reason": "feeds vanilla's instanceof BedBlock check; NeoForge asks BlockState.isBed. amber_fabric_bridge LivingEntitySleepFabricMixin: same swap before NeoForge's check" },
+        { "mixin": "LivingEntityMixin", "handler": "setOccupiedState", "reason": "redirects vanilla's level.setBlock(OCCUPIED); NeoForge calls BlockState.setBedOccupied. Re-based around that call" },
+        { "mixin": "LivingEntityMixin", "handler": "onGetSleepingDirection", "reason": "wraps BedBlock.getBedOrientation; NeoForge's getBedOrientation returns UP off a bed and asks BlockState.getBedDirection on one. Re-based on its return value, the event gets vanilla's value (null off a bed)" }
+      ],
+      "_notes": "ServerPlayer.startSleepInBed: NeoForge moved vanilla's body into lambda$startSleepInBed$N (same descriptor) and posts CanPlayerSleepEvent on its result; the MixinFixer moves ServerPlayerEntityMixin's trySleep injectors into that lambda. onIsSleepingInBed / modifyWakeUpPosition follow renumbered lambdas (fixer)."
+    },
+    "fabric-data-generation-api-v1": {
+      "version": "20.3.0",
+      "package": "net.fabricmc.fabric.mixin.datagen",
+      "veto": ["TagProviderMixin"],
+      "_notes": "Data generation only (-Dfabric-api.datagen), never in normal play. Writes Fabric's replace flag and fabric:remove list into TagsProvider output through TagFileHooks; NeoForge builds TagFile(entries, replace, remove) itself and fabric-tag-api's TagFileMixin is vetoed. Not re-based: Fabric datagen of tags with removals on NeoForge is a known gap."
+    },
+    "fabric-resource-loader-v0": {
+      "version": "1.3.1",
+      "package": "net.fabricmc.fabric.mixin.resource.loader",
+      "strip": [
+        { "mixin": "ServerConfigurationNetworkHandlerMixin", "handler": "filterKnownPacks", "method": "runConfiguration()V", "reason": "ModifyArg on new SynchronizeRegistriesTask in startConfiguration; NeoForge moved the rest of vanilla's startConfiguration into runConfiguration (called after its own negotiation), same constructor call there" }
+      ],
+      "_notes": "strip with \"method\" retargets the injector instead of dropping it."
+    },
+    "fabric-tag-api-v1": {
+      "version": "1.3.0",
+      "package": "net.fabricmc.fabric.mixin.tag",
+      "veto": ["TagFileMixin", "TagGroupLoaderMixin"],
+      "_notes": "Fabric adds a remove list to TagFile (JSON \"fabric:remove\") and applies it in TagLoader. NeoForge's TagFile record already has remove (JSON \"remove\"; Mixin can't add a second remove()) and its TagLoader applies removals after all packs' additions. amber_fabric_bridge TagFileFabricMixin: TagFile implements FabricTagFile through NeoForge's accessor, the codec reads \"fabric:remove\" into \"remove\". Both Fabric mixins vetoed (one unit: TagGroupLoaderMixin would apply NeoForge's own removals a second time). TagEntryAccessor kept."
+    },
+    "fabric-renderer-indigo": {
+      "version": "1.7.1",
+      "package": "net.fabricmc.fabric.mixin.client.indigo.renderer",
+      "strip": [
+        { "mixin": "SectionBuilderMixin", "handler": "hookBuildRenderBlock", "reason": "NeoForge's compile overload calls renderBatched(..., ModelData, RenderType) once per render type instead of renderBlock once per block. amber_fabric_bridge SectionCompilerIndigoMixin tessellates a Fabric model on its block's first call and skips the rest" }
+      ],
+      "_notes": "hookBuild (prepare at BlockPos.betweenClosed) and hookBuildReturn (release at RETURN) are moved by the fixer's delegating-overload rule: NeoForge's 4-arg compile only forwards to the 5-arg one with List.of()."
+    },
+    "fabric-lifecycle-events-v1": {
+      "version": "2.6.0",
+      "package": "net.fabricmc.fabric.mixin.event.lifecycle",
+      "strip": [
+        { "mixin": "client.WorldChunkMixin", "handler": "onRemoveBlockEntity(Ljava/util/Map;Ljava/lang/Object;)Ljava/lang/Object;", "reason": "Map.remove sliced from createBlockEntity in getBlockEntity; NeoForge drops a removed block entity before the create path. amber_fabric_bridge LevelChunkUnloadFabricMixin wraps NeoForge's first Map.remove there" }
+      ],
+      "_notes": "The other two client.WorldChunkMixin handlers (setBlockEntity load/unload, removeBlockEntity unload) kept; they share the name onRemoveBlockEntity, so the strip names the descriptor."
+    },
+    "fabric-events-interaction-v0": {
+      "version": "0.7.14",
+      "package": "net.fabricmc.fabric.mixin.event.interaction",
+      "veto": ["ServerPlayNetworkHandlerMixin"],
+      "strip": [
+        { "mixin": "ServerPlayerInteractionManagerMixin", "handler": "breakBlock", "reason": "captures vanilla destroyBlock locals by position; NeoForge's destroyBlock differs. amber_fabric_bridge ServerPlayerGameModeFabricMixin fires BEFORE/CANCELED with locals by type" },
+        { "mixin": "ServerPlayerInteractionManagerMixin", "handler": "onBlockBroken", "reason": "targets Block.destroy in destroyBlock; NeoForge calls it inside removeBlock(pos, state, canHarvest). amber_fabric_bridge fires AFTER around that removeBlock" },
+        { "mixin": "client.MinecraftClientMixin", "handler": "injectUseEntityCallback", "reason": "captures startUseItem locals by position; NeoForge added an event local. amber_fabric_bridge MinecraftUseEntityFabricMixin takes them by type" }
+      ],
+      "_notes": "ServerPlayNetworkHandlerMixin shadows the interact handler's captured entity as val$target; NeoForge's ServerGamePacketListenerImpl$1 names it val$entity (NeoForge's source renamed the local). amber_fabric_bridge ServerInteractEntityFabricMixin: the same two HEAD hooks. Everything else in the module kept (AttackBlock / UseBlock / UseItem on the server, attack / pick-block on the client)."
+    },
+    "fabric-object-builder-api-v1": {
+      "version": "15.2.1",
+      "package": "net.fabricmc.fabric.mixin.object.builder",
+      "veto": ["client.HangingSignEditScreenMixin"],
+      "strip": [
+        { "mixin": "TradeOffersTypeAwareBuyForOneEmeraldFactoryMixin", "handler": "disableVanillaCheck", "reason": "redirects the constructor's every-villager-type check; NeoForge's EmeraldsForVillagerTypeItem constructor no longer has it. failOnNullItem kept" }
+      ],
+      "_notes": "HangingSignEditScreenMixin makes the screen texture use the WoodType's namespace; NeoForge's constructor already does ResourceLocation.parse(woodType.name() + \".png\").withPrefix(\"textures/gui/hanging_signs/\")."
+    },
+    "fabric-particles-v1": {
+      "version": "4.0.2",
+      "package": "net.fabricmc.fabric.mixin.client.particle",
+      "veto": ["BlockDustParticleMixin"],
+      "strip": [
+        { "mixin": "ParticleManagerAccessor", "handler": "getFactories", "reason": "vanilla's Int2ObjectMap factories; NeoForge keys providers by ResourceLocation. Its only caller, DirectParticleFactoryRegistry, is replaced (amber-impl) and registers through ParticleEngine.register" }
+      ],
+      "replaceImpl": true,
+      "_notes": "BlockDustParticleMixin slices vanilla's !state.is(GRASS_BLOCK) tint check in the TerrainParticle constructor; NeoForge replaced it with IClientBlockExtensions.areBreakingParticlesTinted. amber_fabric_bridge TerrainParticleFabricMixin ANDs ALLOW_BLOCK_DUST_TINT into NeoForge's check. ParticleManagerAccessor keeps the atlas and sprite-set accessors (FabricSpriteProviderImpl), ParticleManagerMixin (initialize at registerProviders RETURN) kept."
+    },
+    "fabric-rendering-v1": {
+      "version": "5.2.1",
+      "package": "net.fabricmc.fabric.mixin.client.rendering",
+      "veto": ["BlockColorsMixin", "ItemColorsMixin", "shader.ShaderProgramMixin", "shader.ShaderProgramImportProcessorMixin"],
+      "_notes": "Colours: NeoForge keeps BlockColors/ItemColors in Maps (vanilla: IdMapper, which Fabric's mixins shadow); amber_fabric_bridge BlockColorsFabricMixin / ItemColorsFabricMixin answer ColorMapperHolder.get from the maps and initialize ColorProviderRegistry at the end of createDefault. Shaders: NeoForge's ShaderInstance already parses namespaced core shader ids (ResourceLocation.parse -> <ns>:shaders/core/<path>.json, same for each stage) and resolves namespaced #moj_import through ClientHooks.getShaderImportLocation, which is what Fabric's two shader mixins add to vanilla, so they are vetoed with nothing in their place. GameRendererMixin (CoreShaderRegistrationCallback) kept."
+    },
+    "fabric-item-api-v1": {
+      "version": "11.3.0",
+      "package": "net.fabricmc.fabric.mixin.item",
+      "veto": ["ItemStackMixin", "RegistryLoaderMixin", "RecipeMixin", "BrewingStandBlockEntityMixin", "AbstractFurnaceBlockEntityMixin",
+               "EnchantmentHelperMixin", "AnvilScreenHandlerMixin", "EnchantCommandMixin", "EnchantRandomlyLootFunctionMixin", "client.ClientPlayerInteractionManagerMixin"],
+      "_notes": "NeoForge already routes recipe remainders (crafting, furnace fuel, brewing) through IItemExtension.get/hasCraftingRemainingItem(stack) and every enchantability check (anvil, /enchant, enchant_randomly, enchanting table) through ItemStack.supportsEnchantment / isPrimaryItemFor, so Fabric's eight redirects of vanilla's call sites have no targets. amber_fabric_bridge: ItemFabricExtensionMixin (Item: getRecipeRemainder / canBeEnchantedWith overrides answer NeoForge's methods), ItemStackFabricMixin (FabricItemStack back on ItemStack, ALLOW_ENCHANTING first in supportsEnchantment / isPrimaryItemFor, CustomDamageHandler around NeoForge's LivingEntity hurtAndBreak), RegistryDataLoaderFabricMixin (EnchantmentEvents.MODIFY on NeoForge's decoded Optional), MultiPlayerGameModeFabricMixin (allowContinuingBlockBreaking on shouldCauseBlockBreakReset). ItemMixin, LivingEntityMixin and the rest kept."
+    },
+    "fabric-rendering-fluids-v1": {
+      "version": "3.1.6",
+      "package": "net.fabricmc.fabric.mixin.client.rendering.fluid",
+      "veto": ["FluidRendererMixin"],
+      "_notes": "NeoForge's LiquidBlockRenderer.tesselate takes sprites from FluidSpriteCache, tint from IClientFluidTypeExtensions (ARGB) and asks BlockState.shouldDisplayFluidOverlay; Fabric's mixin targets the vanilla locals (modLavaCheck has no target). amber_fabric_bridge LiquidBlockRendererFabricMixin does the same on NeoForge's calls: handler dispatch at HEAD for Fabric-registered handlers, handler sprites/tint inside Fabric's default renderer, setBlockTransparency overrides, setupSprites -> onFluidRendererReload. FluidTypes for Fabric fluids: amber_fabric_bridge FluidTypeFallbackMixin (any Fabric fluid, with or without this module)."
+    },
+    "fabric-sound-api-v1": {
+      "version": "1.0.23",
+      "package": "net.fabricmc.fabric.mixin.client.sound",
+      "veto": ["SoundSystemMixin"],
+      "_notes": "NeoForge streams through SoundInstance.getStream; amber_fabric_bridge's SoundEngineStreamMixin routes FabricSoundInstance.getAudioStream overrides there (brief 6.9). SoundInstanceMixin kept."
+    },
+    "fabric-recipe-api-v1": {
+      "version": "5.0.16",
+      "package": "net.fabricmc.fabric.mixin.recipe",
+      "veto": ["ingredient.ClientConnectionMixin", "ingredient.EncoderHandlerMixin", "ingredient.IngredientMixin", "ingredient.ShapelessRecipeMixin"],
+      "skipEntrypoints": ["net.fabricmc.fabric.impl.recipe.ingredient.CustomIngredientSync", "net.fabricmc.fabric.impl.recipe.ingredient.client.CustomIngredientSyncClient"],
+      "replaceImpl": true,
+      "_notes": "NeoForge's Ingredient is final, so Fabric's CustomIngredientImpl (an Ingredient subclass) can't load. Re-based: Amber's CustomIngredient.toVanilla() / CustomIngredientImpl (amber-impl) wrap the custom ingredient as a NeoForge ICustomIngredient (AmberNeoIngredient) with one IngredientType per Fabric serializer, registered under the same id (NeoForge syncs the registry, so the ingredient-support handshake goes); the bridge's CraftingHelperFabricCodecMixin reads Fabric's \"fabric:type\" JSON and IngredientFabricMixin answers FabricIngredient from NeoForge's custom slot. ShapelessRecipe matching uses NeoForge's isSimple() path. All four mixins stay vetoed (one unit)."
+    },
+    "fabric-key-binding-api-v1": {
+      "version": "1.0.47",
+      "package": "net.fabricmc.fabric.mixin.client.keybinding",
+      "veto": ["GameOptionsMixin"],
+      "replaceImpl": true,
+      "_notes": "Keys handed to NeoForge in RegisterKeyMappingsEvent (brief 6.5). KeyBindingAccessor kept."
+    },
+    "fabric-registry-sync-v0": {
+      "version": "5.3.2",
+      "package": "net.fabricmc.fabric.mixin.registry.sync",
+      "veto": ["BootstrapMixin", "MainMixin", "RegistriesMixin", "IdListMixin", "RegistryKeysMixin", "SaveLoadingMixin", "ExperimentalRegistriesValidatorMixin",
+               "SimpleRegistryMixin",
+               "client.MinecraftClientMixin", "client.ItemColorsMixin", "client.BlockColorsMixin", "client.ItemModelsMixin", "client.ParticleManagerMixin"],
+      "strip": [ { "mixin": "RegistryLoaderMixin", "handler": "prependDirectoryWithNamespace", "reason": "NeoForge's elementsDirPath already prefixes the namespace (ns/ns/path)" } ],
+      "skipEntrypoints": ["net.fabricmc.fabric.impl.registry.sync.FabricRegistryInit", "net.fabricmc.fabric.impl.client.registry.sync.FabricRegistryClientInit"],
+      "_notes": "Numeric id sync is NeoForge's (neoforge:sync_registries); Fabric's sync payloads and BEFORE_CONFIGURE task never run. SimpleRegistryMixin vetoed (its addAlias/get() alias redirects would hijack NeoForge aliases); the bridge's MappedRegistryListenable keeps ListenableRegistry, fed by a NeoForge AddCallback. SYNCED on a Fabric-created registry -> BaseMappedRegistry.setSync(true) (FabricWindow)."
+    },
+    "fabric-networking-api-v1": {
+      "version": "4.3.1",
+      "package": "net.fabricmc.fabric.mixin.networking",
+      "veto": ["CustomPayloadC2SPacketMixin", "CustomPayloadS2CPacketMixin", "CustomPayloadPacketCodecMixin", "ServerConfigurationNetworkHandlerMixin",
+               "ServerCommonNetworkHandlerMixin", "client.ClientCommonNetworkHandlerMixin", "PacketByteBufMixin", "PacketCodecDispatcherMixin",
+               "PlayerManagerMixin", "CommandManagerMixin",
+               "ServerPlayNetworkHandlerMixin", "ServerLoginNetworkHandlerMixin",
+               "client.ClientPlayNetworkHandlerMixin", "client.ClientConfigurationNetworkHandlerMixin", "client.ClientLoginNetworkHandlerMixin"],
+      "skipEntrypoints": ["net.fabricmc.fabric.impl.networking.CommonPacketsImpl::init", "net.fabricmc.fabric.impl.networking.NetworkingImpl::init", "net.fabricmc.fabric.impl.networking.client.ClientNetworkingImpl::clientInit"],
+      "replaceImpl": true,
+      "_notes": "NeoForge owns the wire (minecraft:register, codecs, handshake): the per-connection Fabric addon mixins are vetoed on both sides and impl.networking (ServerNetworkingImpl, ClientNetworkingImpl, the four addons) is replaced by Amber classes. Payload types are handed to NeoForge in RegisterPayloadHandlersEvent (optional, one dispatcher per id); configuration tasks via the bridge mixin on ServerConfigurationPacketListenerImpl; play events from NeoForge login/logout events. Login networking unsupported."
+    }
+  }
+}

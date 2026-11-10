@@ -1,0 +1,33 @@
+{
+ "mcVersion": "1.20.1",
+ "platforms": [
+  "forge"
+ ],
+ "_note": "Forge 1.20.1 platform (interface v1.1): the three official mapping tables, checked by sha1 + size before use; Forge itself (install dir with inst/, libraries/, platform-cache/) is provided by the launcher. Mojang mappings are local only (never redistributed). Loader libraries are not listed here: requirements adds them from amber-ul/loader-libs.json, generated from the build class path (interface v1.3).",
+ "files": [
+  {
+   "kind": "mappings",
+   "url": "https://piston-data.mojang.com/v1/objects/6c48521eed01fe2e8ecdadbd5ae348415f3c47da/client.txt",
+   "sha1": "6c48521eed01fe2e8ecdadbd5ae348415f3c47da",
+   "size": 8001795,
+   "path": "mappings/1.20.1/client_mappings.txt",
+   "licence": "Mojang mappings licence: use permitted, redistribution not (local cache only)"
+  },
+  {
+   "kind": "mappings",
+   "url": "https://maven.fabricmc.net/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1-v2.jar",
+   "sha1": "20ba9399cb5a23aa06ea901eff0a84e648d866db",
+   "size": 508743,
+   "path": "mappings/1.20.1/intermediary-1.20.1-v2.jar",
+   "licence": "CC0-1.0 (FabricMC/intermediary LICENSE)"
+  },
+  {
+   "kind": "mappings",
+   "url": "https://maven.minecraftforge.net/de/oceanlabs/mcp/mcp_config/1.20.1-20230612.114412/mcp_config-1.20.1-20230612.114412.zip",
+   "sha1": "c7d29380ddb38becad7c0819b5b325e43bca23f0",
+   "size": 1740711,
+   "path": "mappings/1.20.1/mcp_config-1.20.1-20230612.114412.zip",
+   "licence": "All Rights Reserved, No redistribution."
+  }
+ ]
+}

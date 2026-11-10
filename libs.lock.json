@@ -1,0 +1,171 @@
+{
+ "schema": "jay-loader/libs-lock@1",
+ "note": "Loader libraries: the build class path, in order. tools/fetch_libs.py downloads them into deps/ and checks sha256.",
+ "files": [
+  {
+   "group": "org.antlr",
+   "artifact": "antlr4-runtime",
+   "version": "4.11.1",
+   "url": "https://repo1.maven.org/maven2/org/antlr/antlr4-runtime/4.11.1/antlr4-runtime-4.11.1.jar",
+   "sha1": "069214c1de1960040729702eb58deac8827135e7",
+   "sha256": "e06c6553c1ccc14d36052ec4b0fc6f13b808cf957b5b1dc3f61bf401996ada59",
+   "size": 324039,
+   "path": "deps/antlr4-runtime-4.11.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "org.tomlj",
+   "artifact": "tomlj",
+   "version": "1.1.1",
+   "url": "https://repo1.maven.org/maven2/org/tomlj/tomlj/1.1.1/tomlj-1.1.1.jar",
+   "sha1": "3c48b7b4014599bf89fee2edc8a9a70812db9c4c",
+   "sha256": "383b7c66966c42ee4913ec977a7b6573631866bddc5318ec4a6215b688dd0d6c",
+   "size": 179432,
+   "path": "deps/tomlj-1.1.1.jar",
+   "license": "Apache-2.0"
+  },
+  {
+   "group": "net.fabricmc",
+   "artifact": "access-widener",
+   "version": "2.1.0",
+   "url": "https://maven.fabricmc.net/net/fabricmc/access-widener/2.1.0/access-widener-2.1.0.jar",
+   "sha1": "f62a27adbfd8ab4d4fa5681793039f2c0b177155",
+   "sha256": "8175b480d8b527618e65cd1826e42eee208b509f8b16b31230f0654268bb9422",
+   "size": 30866,
+   "path": "deps/access-widener-2.1.0.jar",
+   "license": "Apache-2.0"
+  },
+  {
+   "group": "org.ow2.asm",
+   "artifact": "asm",
+   "version": "9.10.1",
+   "url": "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar",
+   "sha1": "ada2141c0cc52ee8f5c48cd5fa4ce0e794f22236",
+   "sha256": "ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb",
+   "size": 126151,
+   "path": "deps/asm-9.10.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "org.ow2.asm",
+   "artifact": "asm-analysis",
+   "version": "9.10.1",
+   "url": "https://repo1.maven.org/maven2/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar",
+   "sha1": "8d49f14d51f632cb1d87c88d1ceaf50db0d8af1b",
+   "sha256": "dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc",
+   "size": 35140,
+   "path": "deps/asm-analysis-9.10.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "org.ow2.asm",
+   "artifact": "asm-commons",
+   "version": "9.10.1",
+   "url": "https://repo1.maven.org/maven2/org/ow2/asm/asm-commons/9.10.1/asm-commons-9.10.1.jar",
+   "sha1": "4229e4c55fd8e01c23f9fe9884075cc628aacc50",
+   "sha256": "6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895",
+   "size": 74840,
+   "path": "deps/asm-commons-9.10.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "org.ow2.asm",
+   "artifact": "asm-tree",
+   "version": "9.10.1",
+   "url": "https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar",
+   "sha1": "e244332a17564c1d1572449399a842de35881be2",
+   "sha256": "3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b",
+   "size": 51958,
+   "path": "deps/asm-tree-9.10.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "org.ow2.asm",
+   "artifact": "asm-util",
+   "version": "9.10.1",
+   "url": "https://repo1.maven.org/maven2/org/ow2/asm/asm-util/9.10.1/asm-util-9.10.1.jar",
+   "sha1": "7bb9d450e8d4cbf9f9e04096c44bbfe7fba80b15",
+   "sha256": "1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c",
+   "size": 95628,
+   "path": "deps/asm-util-9.10.1.jar",
+   "license": "BSD-3-Clause"
+  },
+  {
+   "group": "net.fabricmc",
+   "artifact": "intermediary",
+   "version": "1.21.1-v2",
+   "url": "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1-v2.jar",
+   "sha1": "9ce486577f40c5ed70b243b4a513bdf5dcf2cc7f",
+   "sha256": "e8bd6a4c39e235ee2dc73063558610775c72a2572fa0c6b32915b149074012a6",
+   "size": 582921,
+   "path": "deps/intermediary-1.21.1-v2.jar",
+   "license": "CC0-1.0"
+  },
+  {
+   "group": "net.fabricmc",
+   "artifact": "mapping-io",
+   "version": "0.6.1",
+   "url": "https://maven.fabricmc.net/net/fabricmc/mapping-io/0.6.1/mapping-io-0.6.1.jar",
+   "sha1": "b0f2885e17e383777f02e74e4c9b5d3a3a0f21be",
+   "sha256": "34dd7ea27487ef35d70003509c1b4887ff5f8bff720a3439812ae1be7525e53b",
+   "size": 185830,
+   "path": "deps/mapping-io-0.6.1.jar",
+   "license": "Apache-2.0"
+  },
+  {
+   "group": "io.github.llamalad7",
+   "artifact": "mixinextras-fabric",
+   "version": "0.5.5",
+   "url": "https://repo1.maven.org/maven2/io/github/llamalad7/mixinextras-fabric/0.5.5/mixinextras-fabric-0.5.5.jar",
+   "sha1": "d1055b99c0ab08a8403fe2da3d79ca28e6340a76",
+   "sha256": "5da883dc4bfb16e4ceca3f16d8c4ad937bdfb1ce337ed5ba15472d4d81dd6242",
+   "size": 727864,
+   "path": "deps/mixinextras-fabric-0.5.5.jar",
+   "license": "MIT"
+  },
+  {
+   "group": "net.fabricmc",
+   "artifact": "sponge-mixin",
+   "version": "0.17.5+mixin.0.8.7",
+   "url": "https://maven.fabricmc.net/net/fabricmc/sponge-mixin/0.17.5+mixin.0.8.7/sponge-mixin-0.17.5+mixin.0.8.7.jar",
+   "sha1": "0cef8519a91129d0c21fa03bb9378f0e8ca810e5",
+   "sha256": "03f0065023bfc3045d71bfb99872451d9ad5a0800a5a0dac34ab8c7d5c134f5d",
+   "size": 1551593,
+   "path": "deps/sponge-mixin-0.17.5+mixin.0.8.7.jar",
+   "license": "MIT"
+  },
+  {
+   "group": "net.fabricmc",
+   "artifact": "tiny-remapper",
+   "version": "0.10.4",
+   "url": "https://maven.fabricmc.net/net/fabricmc/tiny-remapper/0.10.4/tiny-remapper-0.10.4.jar",
+   "sha1": "1a36cbf58694950061b5bdf4c45de46b2014baf5",
+   "sha256": "d69adb35b71a68b6ec0ffc7869a79ab0a88e10d91b2ce2af518bdd2bc06e91ea",
+   "size": 228123,
+   "path": "deps/tiny-remapper-0.10.4.jar",
+   "license": "LGPL-3.0-only"
+  },
+  {
+   "group": "org.tukaani",
+   "artifact": "xz",
+   "version": "1.9",
+   "url": "https://repo1.maven.org/maven2/org/tukaani/xz/1.9/xz-1.9.jar",
+   "sha1": "1ea4bec1a921180164852c65006d928617bd2caf",
+   "sha256": "211b306cfc44f8f96df3a0a3ddaf75ba8c5289eed77d60d72f889bb855f535e5",
+   "size": 116013,
+   "path": "deps/xz-1.9.jar",
+   "license": "Public domain"
+  },
+  {
+   "group": "com.google.code.gson",
+   "artifact": "gson",
+   "version": "2.10.1",
+   "url": "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar",
+   "sha1": "b3add478d4382b78ea20b1671390a858002feb6c",
+   "sha256": "4241c14a7727c34feea6507ec801318a3d4a90f070e4525681079fb94ee4c593",
+   "size": 283367,
+   "path": "deps/gson-2.10.1.jar",
+   "license": "Apache-2.0"
+  }
+ ]
+}

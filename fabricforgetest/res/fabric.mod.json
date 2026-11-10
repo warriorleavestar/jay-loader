@@ -1,0 +1,10 @@
+{
+ "schemaVersion": 1,
+ "id": "amber_fft",
+ "version": "0.1.0",
+ "name": "Amber Fabric-on-Forge Test",
+ "description": "Registers a block and an item from a Fabric entrypoint (Amber universal loader prototype test mod).",
+ "environment": "*",
+ "entrypoints": { "main": ["amber.fabricforgetest.FabricForgeTest"], "client": ["amber.fabricforgetest.FabricForgeTest"] },
+ "depends": { "fabricloader": ">=0.14", "minecraft": "1.20.1", "java": ">=17" }
+}

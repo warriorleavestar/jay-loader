@@ -1,0 +1,2 @@
+{ "required": true, "minVersion": "0.8", "package": "amber.testmod.mixin", "compatibilityLevel": "JAVA_21",
+  "refmap": "amber-testmod-refmap.json", "client": ["TitleScreenMixin", "MinecraftAccessor"], "injectors": { "defaultRequire": 1 } }

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "amber_fabric_bridge",
+  "version": "0.1.0",
+  "name": "Amber Fabric bridge (NeoForge)",
+  "description": "Amber's own Fabric-on-NeoForge bridge: Fabric init in NeoForge's registration window, Fabric API modules re-based on NeoForge systems. Added by the universal loader on the NeoForge platform; not a user mod.",
+  "environment": "*",
+  "mixins": ["amber_fabric_bridge.mixins.json"]
+}

@@ -1,0 +1,5 @@
+{
+  "fabric:load_conditions": [{ "condition": "fabric:all_mods_loaded", "values": ["amber_no_such_mod"] }],
+  "type": "minecraft:chest",
+  "pools": [{ "rolls": 1, "entries": [{ "type": "minecraft:item", "name": "minecraft:diamond" }] }]
+}

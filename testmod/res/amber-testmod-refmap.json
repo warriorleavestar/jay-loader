@@ -1,0 +1,6 @@
+{ "mappings": {
+    "amber/testmod/mixin/TitleScreenMixin": { "init": "Lnet/minecraft/class_442;method_25426()V" },
+    "amber/testmod/mixin/MinecraftAccessor": { "fps": "field_1738:I" } },
+  "data": { "named:intermediary": {
+    "amber/testmod/mixin/TitleScreenMixin": { "init": "Lnet/minecraft/class_442;method_25426()V" },
+    "amber/testmod/mixin/MinecraftAccessor": { "fps": "field_1738:I" } } } }

@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "fabric:type": "fabric:any", "ingredients": [ { "item": "minecraft:dirt" }, { "item": "minecraft:sand" } ] },
+    { "item": "minecraft:stick" }
+  ],
+  "result": { "id": "minecraft:diamond", "count": 1 }
+}

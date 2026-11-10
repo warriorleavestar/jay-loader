@@ -1,0 +1,14 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+[[mods]]
+modId="amber_forgeworldtest"
+version="0.1.0"
+displayName="Amber Forge World Test"
+description="Creates a test world from the title screen and reports in-world ticks (Amber universal loader prototype, M4)."
+[[dependencies.amber_forgeworldtest]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"

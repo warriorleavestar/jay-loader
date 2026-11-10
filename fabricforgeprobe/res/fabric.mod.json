@@ -1,0 +1,10 @@
+{
+ "schemaVersion": 1,
+ "id": "amber_ffprobe",
+ "version": "0.1.0",
+ "name": "Amber Fabric-on-Forge Probes",
+ "description": "Checks Amber's Fabric bridge for Forge with Fabric API 0.92 (Amber universal loader prototype test mod).",
+ "environment": "client",
+ "entrypoints": { "main": ["amber.fabricforgeprobe.ProbeMod"], "client": ["amber.fabricforgeprobe.ProbeMod"] },
+ "depends": { "fabricloader": ">=0.14", "minecraft": "1.20.1", "java": ">=17", "fabric-events-interaction-v0": "*", "fabric-entity-events-v1": "*", "fabric-lifecycle-events-v1": "*", "fabric-loot-api-v2": "*", "fabric-loot-tables-v1": "*", "fabric-key-binding-api-v1": "*", "fabric-screen-api-v1": "*", "fabric-item-api-v1": "*", "fabric-rendering-v1": "*", "fabric-particles-v1": "*", "fabric-sound-api-v1": "*", "fabric-tag-api-v1": "*", "fabric-transfer-api-v1": "*", "fabric-content-registries-v0": "*", "fabric-resource-conditions-api-v1": "*", "fabric-dimensions-v1": "*", "fabric-model-loading-api-v1": "*", "fabric-rendering-fluids-v1": "*", "fabric-networking-api-v1": "*", "fabric-registry-sync-v0": "*" }
+}

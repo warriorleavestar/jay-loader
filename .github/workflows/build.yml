@@ -1,0 +1,69 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # build.sh and the tools use Windows class-path separators and Git Bash
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check licence texts
+        run: python -I tools/fetch_license_texts.py --check
+      - name: Build (loader only; the bridges need local platform files that are never in the repository)
+        run: bash build.sh
+      - name: Tests that need no Minecraft downloads
+        run: |
+          CP="build/loader;build/test;$(cat build/loader-cp.txt)"
+          java -cp "$CP" amber.ul.HardeningTest
+      - name: Package
+        run: python -I tools/package.py --core-only | tee package.json
+      - name: Bake interface smoke test (from the package alone)
+        run: |
+          D=$(python -I -c "import json; print(json.load(open('package.json'))['dir'])")
+          cd "$D" && java -cp "$(python -I -c "import json; print(';'.join(json.load(open('manifest.json'))['classpath']))")" amber.ul.Bake version
+      - name: Checksum
+        run: |
+          Z=$(python -I -c "import json; print(json.load(open('package.json'))['zip'])")
+          cp "$Z" . && N=$(basename "$Z") && sha256sum "$N" > "$N.sha256" && cat "$N.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: |
+            amber-ul-*.zip
+            amber-ul-*.zip.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+      - name: Attach the zip and its sha256 to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "Loader package (core; bridges are built separately)."
+          gh release upload "$GITHUB_REF_NAME" amber-ul-*.zip amber-ul-*.zip.sha256 --repo "$GITHUB_REPOSITORY" --clobber

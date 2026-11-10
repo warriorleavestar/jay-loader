@@ -1,0 +1,14 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="amber_nfworldtest"
+version="0.1.0"
+displayName="Amber NeoForge World Test"
+description="Opens/creates a test world and reports registries (Amber universal loader prototype)."
+[[dependencies.amber_nfworldtest]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="BOTH"

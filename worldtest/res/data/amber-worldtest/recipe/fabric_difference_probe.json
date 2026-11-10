@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "fabric:type": "fabric:difference", "base": { "tag": "minecraft:planks" }, "subtracted": { "item": "minecraft:oak_planks" } },
+    { "item": "minecraft:flint" }
+  ],
+  "result": { "id": "minecraft:emerald", "count": 1 }
+}

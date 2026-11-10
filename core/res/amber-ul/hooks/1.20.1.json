@@ -1,0 +1,13 @@
+{
+  "_comment": "Loader hook points for MC 1.20.1 (copied from 1.21.1, verified on the Forge platform game jar by M4) in the runtime (named/Mojmap) namespace. at: head | after_super | after_putfield | after_invoke. target = Owner.name:desc (field) or Owner.name(desc) (method). passThis: pass `this` as Object.",
+  "hooks": [
+    { "id": "client_main",  "owner": "net/minecraft/client/main/Main", "method": "main", "desc": "([Ljava/lang/String;)V", "at": "head", "call": "amber/ul/runtime/GameHooks.clientMain" },
+    { "id": "client_start", "owner": "net/minecraft/client/Minecraft", "method": "<init>", "desc": "(Lnet/minecraft/client/main/GameConfig;)V",
+      "at": "before_last_invoke_before_ldc", "target": "java/lang/Thread.currentThread()Ljava/lang/Thread;", "ldc": "Backend library: {}", "passThis": true, "call": "amber/ul/runtime/GameHooks.startClient",
+      "_why": "Fabric EntrypointPatch anchor (verified with javap on 1.21.1: one currentThread() before the LDC, offset 566). Fabric API's registry freeze @Inject targets the same INVOKE and must run after mod init." },
+    { "id": "server_start", "owner": "net/minecraft/server/Main", "method": "main", "desc": "([Ljava/lang/String;)V",
+      "at": "after_invoke", "target": "net/minecraft/server/Bootstrap.bootStrap()V", "call": "amber/ul/runtime/GameHooks.startServer",
+      "_why": "dedicated server only; integrated server runs no entrypoints (as Fabric)" },
+    { "id": "title_screen", "owner": "net/minecraft/client/gui/screens/TitleScreen", "method": "init", "desc": "()V", "at": "head", "call": "amber/ul/runtime/GameHooks.titleScreen" }
+  ]
+}

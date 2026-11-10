@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "amber_fabric_bridge",
+  "version": "0.1.0",
+  "name": "Amber Fabric bridge (Forge)",
+  "description": "Amber's own Fabric-on-Forge bridge: Fabric init in Forge 47's registration window. Added by the universal loader on the Forge 1.20.1 platform; not a user mod.",
+  "environment": "*",
+  "mixins": ["amber_fabric_bridge_forge.mixins.json"],
+  "accessWidener": "amber_fabric_bridge_forge.accesswidener"
+}

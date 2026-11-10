@@ -1,0 +1,4 @@
+tiny	2	0	intermediary	named
+c	net/minecraft/class_2378	net/minecraft/core/Registry
+	m	(Ljava/lang/String;Ljava/lang/String;)V	method_10230	register
+	f	Ljava/util/Map;	field_11144	ITEMS

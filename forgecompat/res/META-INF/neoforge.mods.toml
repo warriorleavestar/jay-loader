@@ -1,0 +1,14 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="amber_forgecompat"
+version="0.1.0"
+displayName="Amber Forge compatibility"
+description="Forge 1.21.1 API classes for Forge mods on NeoForge 1.21.1 (Amber universal loader prototype)."
+[[dependencies.amber_forgecompat]]
+modId="neoforge"
+type="required"
+versionRange="[21,)"
+ordering="NONE"
+side="BOTH"

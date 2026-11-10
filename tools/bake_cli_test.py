@@ -1,0 +1,237 @@
+"""Bake interface v1.3 check (docs/amber-bake-interface.md): drives amber.ul.Bake the way Amber does and launches from
+the returned `launch` block only.
+  python -I tools/bake_cli_test.py [forge|vanilla|all] [--package]
+--package: runs tools/package.py and uses only the packaged folder (build/dist/amber-ul-<v>/: loader.jar, libs/, bridges/,
+manifest.json; its sha256s are checked first) instead of the dev build.
+Everything is written under mc/bakecli/ (test data, git-ignored); the Mojang/Forge inputs are read from mc/.
+Forge: mapping tables copied into an Amber-style mappingsDir with no manifest (checked against the bundled table),
+census run (bakes everything, loads every Mixin target). Vanilla: Fabric mod set to the title screen.
+warm + gc (v1.1): warm on both states; gc dry runs and refusals on both caches; gc apply only on mc/bakecli/forge-cache
+(the vanilla cache mc/ulcache-world is shared with other test states, so it only gets a dry run).
+"""
+import json, os, shutil, subprocess, sys, threading, time
+# the prototype root as the JVM sees it (tools/proto_root.py: ASCII path or its junction)
+R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proto_root.py')], capture_output=True, text=True, check=True).stdout.strip()
+MC = f'{R}/mc'; T = f'{MC}/bakecli'; JAVA = f'{R}/tools/jre21/bin/java.exe'
+fails = []
+PKG = None
+if '--package' in sys.argv:
+    out = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'package.py')], capture_output=True, text=True)
+    if out.returncode: sys.exit('package.py failed: ' + out.stderr[-800:])
+    PKG = json.loads(out.stdout.strip().splitlines()[-1])['dir'].replace('\\', '/')
+    MAN = json.load(open(f'{PKG}/manifest.json', encoding='utf-8'))
+    LCP = ';'.join(f'{PKG}/{c}' for c in MAN['classpath'])
+    import hashlib
+    bad = [n for n, d in MAN['files'].items() if hashlib.sha256(open(f'{PKG}/{n}', 'rb').read()).hexdigest() != d['sha256']]
+    on_disk = sorted(os.path.relpath(os.path.join(d, f), PKG).replace('\\', '/') for d, _, fs in os.walk(PKG) for f in fs if f != 'manifest.json')
+    print(('OK   ' if not bad and on_disk == sorted(MAN['files']) else 'FAIL ') + f'package {PKG}: manifest sha256 of {len(MAN["files"])} files, nothing unlisted', flush=True)
+    if bad or on_disk != sorted(MAN['files']): fails.append('package manifest')
+    ok = all(os.path.exists(f'{PKG}/bridges/{b}') for b in ('fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar')) and MAN['javaMin'] == {'vanilla': 21, 'neoforge': 21, 'forge': 21}
+    print(('OK   ' if ok else 'FAIL ') + 'package: all bridge jars under bridges/, javaMin 21 per platform', flush=True)
+    if not ok: fails.append('package layout')
+else:
+    LCP = ';'.join([f'{R}/build/loader'] + open(f'{R}/build/loader-cp.txt').read().strip().split(';'))
+CP_NAMES = sorted(os.path.basename(e) for e in LCP.split(';')[1:])
+
+def bake(stage, req):
+    os.makedirs(T, exist_ok=True); rf = f'{T}/req-{stage}.json'
+    json.dump(req, open(rf, 'w', encoding='utf-8'))
+    p = subprocess.run([JAVA, '-cp', LCP, 'amber.ul.Bake', stage, '--request', rf], capture_output=True)
+    lines = [json.loads(l) for l in p.stdout.decode('utf-8').splitlines() if l.startswith('{')]
+    return p.returncode, lines, p.stderr.decode('utf-8', 'replace')
+
+def check(what, ok, detail=''):
+    print(('OK   ' if ok else 'FAIL ') + what + ('' if ok else f'  {detail}'), flush=True)
+    if not ok: fails.append(what)
+
+def libs(mcv, libdir):
+    ver = json.load(open(f'{MC}/versions/{mcv}/{mcv}.json')); out = []
+    for lib in ver['libraries']:
+        ok = True
+        for r in lib.get('rules', []):
+            if 'os' not in r or r['os'].get('name') == 'windows': ok = r['action'] == 'allow'
+            elif r['action'] == 'allow': ok = False
+        if ok and 'artifact' in lib['downloads']: out.append(f"{libdir}/{lib['downloads']['artifact']['path']}")
+    return ver, out
+
+def launch(label, res, ver, mcv, gamedir, marker, extra_largs, extra_jvm, timeout=600):
+    L = res['launch']
+    game = ['--username', 'AmberTest', '--version', mcv, '--gameDir', gamedir, '--assetsDir', f'{MC}/assets', '--assetIndex', ver['assetIndex']['id'],
+            '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--versionType', 'release']
+    jvm = ['-Xmx3G', '-Dstdout.encoding=UTF-8', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
+           f'-Dorg.lwjgl.system.SharedLibraryExtractPath={MC}/natives', f'-Djna.tmpdir={MC}/natives'] + extra_jvm
+    cmd = [JAVA] + L['jvmArgs'] + jvm + ['-cp', ';'.join(L['classpath']), L['mainClass']] + extra_largs + L['gameArgsPrefix'] + game
+    os.makedirs(gamedir, exist_ok=True); log = open(f'{T}/{label}.log', 'w', encoding='utf-8')
+    p = subprocess.Popen(cmd, cwd=gamedir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT); hit = threading.Event(); seen = []
+    def pump():
+        for raw in p.stdout:
+            line = raw.decode('utf-8', 'replace').rstrip(); log.write(line + '\n'); log.flush()
+            if '映射图' in line: seen.append(line.strip())
+            if '@amber-ul/problem ' in line: seen.append('PROBLEM ' + line.split('@amber-ul/problem ', 1)[1])
+            if marker in line: seen.append(line.strip()); hit.set()
+    threading.Thread(target=pump, daemon=True).start()
+    ok = hit.wait(timeout)
+    p.kill(); p.wait(); log.close()
+    return ok, seen
+
+def norm(p): return os.path.normcase(os.path.normpath(p))
+
+def problems_file(label, res, seen):
+    """v1.3: the launch wrote launch.problemsFile (first line type launch, every line JSON with schema + code); the
+    stdout lines behind @amber-ul/problem are the same objects."""
+    pf = res['launch'].get('problemsFile')
+    try: lines = [json.loads(l) for l in open(pf, encoding='utf-8') if l.strip()]
+    except Exception as e: lines = None; err = str(e)
+    ok = bool(lines) and lines[0].get('type') == 'launch' and all(l.get('schema') == 'amber-ul/runtime-problem@1' for l in lines) and all(l.get('code') for l in lines[1:])
+    printed = []
+    for s_ in seen:
+        if s_.startswith('PROBLEM '):
+            try: printed.append(json.loads(s_[8:]))
+            except ValueError: ok = False
+    check(f'{label}: runtime problems file is JSON lines with stable codes ({len(lines or []) - 1} problem(s), {len(printed)} on stdout)',
+          ok and all(p_ in lines for p_ in printed), f'{pf} {lines[:2] if lines else err if lines is None else lines}')
+
+def rebake_reused(label, req):
+    """v1.3: the same request again reuses everything and says so (no warm needed)."""
+    code, out, err = bake('bake-instance', req)
+    res = [x for x in out if x['type'] == 'result']
+    c = res[0].get('cache') if res else None
+    check(f'bake-instance {label} again: cache.state reused, warm false', code == 0 and c and c['state'] == 'reused' and c['warm'] is False and c['newCacheFiles'] == 0, f'{code} {c} {err[-300:]}')
+
+def st_files(sf): return json.load(open(sf, encoding='utf-8')).get('cacheFiles', [])
+
+def warm(label, sf):
+    code, out, err = bake('warm', {'schema': 'amber-ul/warm-request@1', 'stateFile': sf})
+    res = [x for x in out if x['type'] == 'result']
+    cf = st_files(sf)
+    check(f'warm {label}: all bakes hit, state lists cacheFiles that exist', code == 0 and res and res[0]['stats']['bakeMisses'] == 0 and cf and all(os.path.exists(f) for f in cf),
+          f'{code} {res[0]["stats"] if res else out[-2:]} missing={[f for f in cf if not os.path.exists(f)][:3]} {err[-300:]}')
+    return set(norm(f) for f in cf)
+
+def gc(req):
+    code, out, err = bake('gc', dict({'schema': 'amber-ul/gc-request@1'}, **req))
+    res = [x for x in out if x['type'] == 'result']
+    return code, (res[0] if res else None), out, err
+
+def forge():
+    mcv = '1.20.1'; ver, ls = libs(mcv, f'{MC}/libraries-{mcv}')
+    md = f'{T}/amberdata/mappings/{mcv}'; os.makedirs(md, exist_ok=True)   # Amber's layout: requirements' paths, no manifest
+    src = f'{MC}/mappings-cache/{mcv}'
+    for a, b in [('mojang-client.txt', 'client_mappings.txt'), ('intermediary-1.20.1-v2.jar', None), ('mcp_config-1.20.1-20230612.114412.zip', None)]:
+        if not os.path.exists(f'{md}/{b or a}'): shutil.copyfile(f'{src}/{a}', f'{md}/{b or a}')
+    code, out, err = bake('requirements', {'schema': 'amber-ul/requirements-request@1', 'mcVersion': mcv, 'side': 'client', 'platform': 'forge',
+                                           'versionJson': f'{MC}/versions/{mcv}/{mcv}.json'})
+    res = [x for x in out if x['type'] == 'result']
+    names = sorted(os.path.basename(f['path']) for f in res[0]['files'] if f['kind'] == 'mappings') if res else []
+    check('requirements forge 1.20.1: the three official tables, client_mappings once', code == 0 and names == ['client_mappings.txt', 'intermediary-1.20.1-v2.jar', 'mcp_config-1.20.1-20230612.114412.zip'], f'{code} {names} {err[-300:]}')
+    shutil.rmtree(f'{T}/forge-cache', ignore_errors=True); shutil.rmtree(f'{T}/amberdata/mapcache', ignore_errors=True)
+    mods = sorted(f'{MC}/mods-forge-world/{f}' for f in os.listdir(f'{MC}/mods-forge-world') if f.endswith('.jar'))
+    req = {'schema': 'amber-ul/bake-instance-request@1', 'mcVersion': mcv, 'side': 'client', 'gameJar': f'{MC}/versions/{mcv}/{mcv}.jar',
+           'libraries': ls, 'libRoot': f'{MC}/libraries-{mcv}', 'mods': [{'path': m} for m in mods], 'javaMajor': 21,
+           'instanceDir': f'{T}/forge-inst', 'gameDir': f'{MC}/game-forge', 'cacheRoot': f'{T}/forge-cache', 'mappingsDir': md,
+           'mappingCache': f'{T}/amberdata/mapcache', 'platform': {'kind': 'forge', 'installDir': f'{MC}/forge'}}
+    t = time.time(); code, out, err = bake('bake-instance', req)
+    res = [x for x in out if x['type'] == 'result']
+    check(f'bake-instance forge ({time.time() - t:.0f} s)', code == 0 and res, f'{code} {[x for x in out if x["type"] in ("error", "problem")][:3]} {err[-500:]}')
+    if not res: return
+    c = res[0].get('cache', {})
+    check('bake-instance forge on a clean cache: cache.state new/rebuilt, warm true, javaMin 21, problemsFile next to the state',
+          c.get('state') in ('new', 'rebuilt') and c.get('warm') is True and res[0]['launch'].get('javaMin') == 21
+          and norm(os.path.dirname(res[0]['launch'].get('problemsFile', ''))) == norm(os.path.dirname(res[0]['launch']['stateFile'])), f'{c} {res[0]["launch"].get("javaMin")}')
+    rebake_reused('forge', req)
+    code, out, _ = bake('bake-instance', dict(req, javaMajor=17))
+    check('bake-instance forge with javaMajor 17: java_too_old, exit 1', code == 1 and any(x.get('code') == 'java_too_old' for x in out), str(out[-1:]))
+    st = json.load(open(res[0]['launch']['stateFile'], encoding='utf-8'))
+    check('state: platform forge + mappingCache', st.get('platform', {}).get('kind') == 'forge' and st.get('mappingCache', '').endswith('mapcache'), str(st.get('platform')))
+    check('launch: securejarhandler on the class path, mapping cache + add-opens in jvmArgs',
+          any('securejarhandler' in c for c in res[0]['launch']['classpath']) and any(j.startswith('-Damber.ul.mappingCache=') for j in res[0]['launch']['jvmArgs']) and '--add-opens' in res[0]['launch']['jvmArgs'])
+    graphs = [f for d, _, fs in os.walk(f'{T}/amberdata/mapcache') for f in fs if f.endswith('.amap')]
+    check('mapping graph in the requested cache', len(graphs) >= 1, str(graphs))
+    sf = res[0]['launch']['stateFile']; root = f'{T}/forge-cache'; mapc = f'{T}/amberdata/mapcache'
+    v1 = f'{T}/forge-state-v1.json'; s1 = dict(st); s1.pop('libraries', None); s1.pop('cacheFiles', None); json.dump(s1, open(v1, 'w', encoding='utf-8'))
+    code, out, _ = bake('warm', {'schema': 'amber-ul/warm-request@1', 'stateFile': v1})
+    check('warm refuses a v1 state (no libraries): stale_state', code == 1 and any(x.get('code') == 'stale_state' for x in out), str(out[-1:]))
+    live = warm('forge', sf)
+    check('warm forge: the mapping graph is in cacheFiles', any(f.endswith('.amap') for f in live), str(sorted(live)[:5]))
+    # refusals: nothing happens without a clear live set and a real cache root
+    code, r, out, _ = gc({'cacheRoot': root, 'liveStateFiles': []})
+    check('gc refuses an empty live set without allowNoLiveStates', code == 1 and r is None, str(out[-1:]))
+    code, r, out, _ = gc({'cacheRoot': root, 'liveStateFiles': [f'{T}/no-such-state.json']})
+    check('gc refuses a missing live state file', code == 1 and r is None, str(out[-1:]))
+    code, r, out, _ = gc({'cacheRoot': root, 'liveStateFiles': [v1]})
+    check('gc refuses a live state without cacheFiles', code == 1 and any(x.get('code') == 'stale_state' for x in out), str(out[-1:]))
+    code, r, out, _ = gc({'cacheRoot': f'{T}/forge-inst', 'liveStateFiles': [sf]})
+    check('gc refuses a directory that is not a loader cache root', code == 1 and r is None, str(out[-1:]))
+    # planted entries: an unreferenced baked mod, a stale and a fresh temp file, a stray graph in the mapping cache
+    junk = f'{root}/baked/mods/{"0" * 32}.jar'; stale = f'{root}/baked/mods/bake-1-2.pre.jar'; fresh = f'{root}/baked/mods/x.jar.tmp7'
+    g = [os.path.join(d, f) for d, _, fs in os.walk(mapc) for f in fs if f.endswith('.amap')][0]; stray = os.path.join(os.path.dirname(g), 'f' * 64 + '.amap')
+    outside = f'{T}/outside-keep.jar'
+    os.makedirs(os.path.dirname(junk), exist_ok=True)
+    for f in (junk, stale, fresh, stray, outside): open(f, 'wb').write(b'x')
+    os.utime(stale, (time.time() - 3 * 3600, time.time() - 3 * 3600))
+    code, r, out, err = gc({'cacheRoot': root, 'liveStateFiles': [sf], 'mappingCache': mapc})
+    listed = {norm(x['path']): x['reason'] for x in r['remove']} if r else {}
+    want = {norm(junk): 'unreferenced', norm(stale): 'stale temp', norm(stray): 'unreferenced'}
+    check('gc dry run (default): lists exactly the planted junk, keeps the fresh temp, deletes nothing',
+          code == 0 and r['apply'] is False and listed == want and all(os.path.exists(f) for f in (junk, stale, fresh, stray)), f'{code} {listed} {err[-300:]}')
+    check('gc dry run: nothing a live state uses is listed', not (set(listed) & live), str(set(listed) & live))
+    code, r, out, _ = gc({'cacheRoot': root, 'liveStateFiles': [], 'allowNoLiveStates': True, 'mappingCache': mapc})
+    every = {norm(x['path']) for x in r['remove']} if r else set()
+    check('gc with no live states (allowNoLiveStates, dry run): every live cache file would go, nothing outside the roots',
+          code == 0 and {f for f in live if os.path.isfile(f)} <= every and all(any(e.startswith(d + os.sep) for e in every) for d in live if os.path.isdir(d)) and all(p.startswith(norm(root)) or p.startswith(norm(mapc)) for p in every), f'{code} {len(every)} missing={sorted(f for f in live - every if os.path.isfile(f))[:3]}')
+    code, r, out, _ = gc({'cacheRoot': root, 'liveStateFiles': [sf], 'mappingCache': mapc, 'apply': True})
+    check('gc apply: removes the planted junk only (outside file, fresh temp, live files stay)',
+          code == 0 and r['removed'] == 3 and not any(os.path.exists(f) for f in (junk, stale, stray)) and os.path.exists(fresh) and os.path.exists(outside) and all(os.path.exists(f) for f in st_files(sf)),
+          f'{code} {r and r.get("removed")} {r and r.get("failed")}')
+    os.remove(fresh); os.remove(outside)
+    ok, seen = launch('forge-launch', res[0], ver, mcv, f'{MC}/game-forge', '普查完成', ['--census', f'{T}/forge-census.json'],
+                      ['-Damber.ul.mixinErrors=warn', '-Damber.ul.censusFresh=true'])
+    check('launch after gc apply, from the state file (census, platform from the state)', ok and any('失败 0' in s for s in seen), str(seen[-3:]))
+    problems_file('forge launch', res[0], seen)
+    # bake caches all hit, so the launch normally needs no graph at all; it must never rebuild one
+    check('launch builds no mapping graph (bake caches hit; graph from the mapping cache if needed)', not any('新建' in s for s in seen if '映射图' in s), str([s for s in seen if '映射图' in s]))
+
+def vanilla():
+    mcv = '1.21.1'; ver, ls = libs(mcv, f'{MC}/libraries')
+    code, out, err = bake('version', {})
+    v = [x for x in out if x['type'] == 'result']
+    check('version: interface 1.3, platforms, mappingCache, javaMin 21 per platform', code == 0 and v and v[0].get('interface') == '1.3' and v[0]['platforms'].get('forge') == ['1.20.1'] and 'mappingCache' in v[0]
+          and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21}, str(v))
+    libv = v[0].get('libs', {}) if v else {}
+    want = {n.rsplit('-', 1)[0]: n.rsplit('-', 1)[1][:-4] for n in CP_NAMES if not n.startswith('intermediary')}
+    check('version.libs: the versions on the real class path (asm, sponge-mixin, mixinextras ...)', all(libv.get(a) == ver_ for a, ver_ in want.items()) and libv.get('asm') == '9.10.1',
+          f'{libv} want {want}')
+    code, out, err = bake('requirements', {'schema': 'amber-ul/requirements-request@1', 'mcVersion': '1.21.1', 'side': 'client', 'versionJson': f'{MC}/versions/1.21.1/1.21.1.json'})
+    rq = [x for x in out if x['type'] == 'result']
+    ll = [f for f in rq[0]['files'] if f['kind'] == 'loader-lib'] if rq else []
+    import hashlib
+    local = {os.path.basename(e): e for e in LCP.split(';')[1:]}
+    sha_ok = all(hashlib.sha1(open(local[os.path.basename(f['path'])], 'rb').read()).hexdigest() == f['sha1'] and os.path.getsize(local[os.path.basename(f['path'])]) == f['size'] for f in ll)
+    check('requirements: loader-lib entries are exactly the class path jars, with matching sha1 + size; javaMin 21',
+          code == 0 and sorted(os.path.basename(f['path']) for f in ll) == CP_NAMES and sha_ok and rq[0].get('javaMin') == 21 and all(f['url'].startswith(('https://repo1.maven.org/maven2/', 'https://maven.fabricmc.net/')) for f in ll),
+          f'{code} {sorted(os.path.basename(f["path"]) for f in ll)} vs {CP_NAMES} sha={sha_ok}')
+    code, out, err = bake('requirements', {'schema': 'amber-ul/requirements-request@1', 'mcVersion': '1.21.1', 'side': 'client', 'platform': 'forge'})
+    check('requirements: forge on 1.21.1 refused (incompatible_loader)', code == 1 and any(x.get('code') == 'incompatible_loader' for x in out), str(out[:2]))
+    mods = sorted(f'{MC}/mods-world/{f}' for f in os.listdir(f'{MC}/mods-world') if f.endswith('.jar'))
+    req = {'schema': 'amber-ul/bake-instance-request@1', 'mcVersion': mcv, 'side': 'client', 'gameJar': f'{MC}/versions/{mcv}/{mcv}.jar',
+           'libraries': ls, 'mods': [{'path': m} for m in mods], 'javaMajor': 21, 'instanceDir': f'{T}/van-inst', 'gameDir': f'{MC}/game',
+           'cacheRoot': f'{MC}/ulcache-world', 'mappingsDir': f'{MC}/mappings'}   # a v1 request: no platform, no mappingCache
+    code, out, err = bake('bake-instance', req)
+    res = [x for x in out if x['type'] == 'result']
+    check('bake-instance with a v1 request (vanilla base, Fabric mods)', code == 0 and res, f'{code} {err[-400:]}')
+    if not res: return
+    rebake_reused('vanilla', req)
+    sf = res[0]['launch']['stateFile']; live = warm('vanilla', sf)
+    code, r, out, err = gc({'cacheRoot': f'{MC}/ulcache-world', 'liveStateFiles': [sf]})   # shared cache: dry run only, never apply
+    listed = {norm(x['path']) for x in r['remove']} if r else set()
+    check('gc dry run on the shared vanilla cache: lists only files this state does not use, deletes nothing',
+          code == 0 and r['apply'] is False and not (listed & live) and all(os.path.exists(p) for p in listed), f'{code} {err[-300:]}')
+    ok, seen = launch('van-launch', res[0], ver, mcv, f'{MC}/game', 'TitleScreen.init', [], [])
+    check('launch from the state file to the title screen', ok, str(seen[-3:]))
+    problems_file('vanilla launch', res[0], seen)
+
+what = next((a for a in sys.argv[1:] if not a.startswith('--')), 'all')
+if what in ('vanilla', 'all'): vanilla()
+if what in ('forge', 'all'): forge()
+print(f'RESULT bakecli {"PASS" if not fails else "FAIL"}: {len(fails)} failed {fails}')
+sys.exit(1 if fails else 0)

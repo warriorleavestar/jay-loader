@@ -1,0 +1,10 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "amber.ul.fabricbridge.mixin",
+  "plugin": "amber.ul.fabricbridge.BridgeMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["GameDataMixin", "fapi.MappedRegistryListenable", "fapi.ServerConfigurationListenerMixin", "fapi.NetworkRegistryMixin", "fapi.ServerPlayerOpenMenuMixin", "fapi.ExtendedScreenHandlerTypeMixin", "fapi.IngredientFabricMixin", "fapi.CraftingHelperFabricCodecMixin", "FluidTypeFallbackMixin", "fapi.ItemStackFabricMixin", "fapi.ItemFabricExtensionMixin", "fapi.RegistryDataLoaderFabricMixin", "fapi.ServerInteractEntityFabricMixin", "fapi.ServerPlayerGameModeFabricMixin", "fapi.LivingEntitySleepFabricMixin", "fapi.TagFileFabricMixin"],
+  "client": ["fapi.SoundEngineStreamMixin", "fapi.LiquidBlockRendererFabricMixin", "fapi.MultiPlayerGameModeFabricMixin", "fapi.BlockColorsFabricMixin", "fapi.ItemColorsFabricMixin", "fapi.MinecraftUseEntityFabricMixin", "fapi.TerrainParticleFabricMixin", "fapi.LevelChunkUnloadFabricMixin", "fapi.SectionCompilerIndigoMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

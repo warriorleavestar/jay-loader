@@ -1,0 +1,17 @@
+{
+ "mcVersion": "1.21.1",
+ "platforms": [
+  "vanilla",
+  "neoforge"
+ ],
+ "_note": "client_mappings comes from the Mojang version json (downloads.client_mappings); its url/sha1 are taken from the request's versionJson Loader libraries are not listed here: requirements adds them from amber-ul/loader-libs.json, generated from the build class path (interface v1.3).",
+ "files": [
+  {
+   "kind": "mappings",
+   "url": "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1-v2.jar",
+   "sha1": "9ce486577f40c5ed70b243b4a513bdf5dcf2cc7f",
+   "size": 582921,
+   "path": "mappings/1.21.1/intermediary-1.21.1-v2.jar"
+  }
+ ]
+}

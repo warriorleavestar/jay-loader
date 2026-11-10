@@ -1,0 +1,31 @@
+{
+  "_comment": "Feature vetoes for Fabric mods on the NeoForge-patched game: mixins that apply cleanly but are semantically wrong there. Delivered as mod options (never by editing the user's config files). Checked on the device 2026-11-05. Rules with via=drop_injector remove one injector from a mixin class (the rest of the mixin stays), for injectors a NeoForge system already does.",
+  "rules": [
+    {
+      "mod": "lithium",
+      "via": "lithium:options",
+      "option": "mixin.collections.poi_types",
+      "reason": "Lithium's PoiTypes <clinit> copy detaches TYPE_BY_STATE from NeoForge's GameData.getBlockStatePointOfInterestTypeMap() (modded POI blocks would be lost)"
+    },
+    {
+      "mod": "lithium",
+      "via": "lithium:options",
+      "option": "mixin.world.chunk_access",
+      "reason": "Lithium's @Overwrite ServerChunkCache.getChunk drops NeoForge's ChunkHolder.currentlyLoading bypass (NeoForge build ships ChunkLoadTricksMixin instead)"
+    },
+    {
+      "mod": "bettermounthud",
+      "via": "drop_injector",
+      "mixin": "me.lortseam.bettermounthud.mixin.IngameHudMixin",
+      "handler": "bettermounthud$moveMountHealthUp",
+      "reason": "NeoForge layered GUI stacks FOOD_LEVEL, VEHICLE_HEALTH, AIR_LEVEL on Gui.rightHeight; with food kept visible (alwaysRenderFood) mount health and air already sit above it, shifting again would double the offset"
+    },
+    {
+      "mod": "bettermounthud",
+      "via": "drop_injector",
+      "mixin": "me.lortseam.bettermounthud.mixin.IngameHudMixin",
+      "handler": "bettermounthud$moveAirUp",
+      "reason": "NeoForge layered GUI stacks FOOD_LEVEL, VEHICLE_HEALTH, AIR_LEVEL on Gui.rightHeight; with food kept visible (alwaysRenderFood) mount health and air already sit above it, shifting again would double the offset"
+    }
+  ]
+}

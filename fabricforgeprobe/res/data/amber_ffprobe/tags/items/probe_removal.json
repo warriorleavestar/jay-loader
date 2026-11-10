@@ -1,0 +1,4 @@
+{
+  "values": ["minecraft:stone", "minecraft:dirt", "minecraft:gravel"],
+  "fabric:remove": ["minecraft:dirt"]
+}

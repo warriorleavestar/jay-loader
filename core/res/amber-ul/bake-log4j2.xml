@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Log config for the Bake CLI process: platform code run at bake time (Forge's coremod engine) must not write log
+     files into the caller's working directory. Warnings go to stderr; stdout stays the JSON-lines stream. -->
+<Configuration status="WARN">
+  <Appenders><Console name="err" target="SYSTEM_ERR"><PatternLayout pattern="[%c{1}] %level: %msg%n"/></Console></Appenders>
+  <Loggers><Root level="warn"><AppenderRef ref="err"/></Root></Loggers>
+</Configuration>

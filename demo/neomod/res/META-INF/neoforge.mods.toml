@@ -1,0 +1,19 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT"
+[[mods]]
+modId = "forgedemo"
+version = "0.3.0"
+displayName = "Forge Demo"
+[[dependencies.forgedemo]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+[[dependencies.forgedemo]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+[[dependencies.forgedemo]]
+modId = "fabricdemo"
+type = "required"
+versionRange = "[1.0,)"

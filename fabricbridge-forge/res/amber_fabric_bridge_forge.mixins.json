@@ -1,0 +1,29 @@
+{
+ "required": true,
+ "minVersion": "0.8",
+ "package": "amber.ul.fabricbridge.forge.mixin",
+ "plugin": "amber.ul.fabricbridge.forge.ForgeBridgeMixinPlugin",
+ "compatibilityLevel": "JAVA_17",
+ "mixins": [
+  "ForgeGameDataMixin",
+  "fapi.ServerInteractEntityFabricMixin", "fapi.ServerBlockBreakFabricMixin", "fapi.ItemFabricExtensionMixin",
+  "fapi.ServerPlayerSleepDirectionFabricMixin",
+  "fapi.ServerPlayerSleepTimeFabricMixin", "fapi.PlayerSleepTickFabricMixin", "fapi.LivingEntityBedFabricMixin",
+  "fapi.LootTableSupplierFabricMixin",
+  "fapi.LootTablePoolsFabricMixin",
+  "fapi.LootDataManagerTableIdFabricMixin",
+  "fapi.WorldLoaderDynamicRegistriesFabricMixin",
+  "fapi.TagFileFabricMixin", "fapi.HopperTransferFabricMixin",
+  "fapi.LootConditionsFabricMixin", "fapi.ServerPlayerEndFabricMixin"
+ ],
+ "client": [
+  "fapi.MinecraftUseEntityFabricMixin",
+  "fapi.ForgeKeyMappingsFabricMixin", "fapi.ScreenRenderFabricMixin", "fapi.ScreenKeyboardFabricMixin",
+  "fapi.BlockColorsFabricMixin", "fapi.ItemColorsFabricMixin", "fapi.TerrainParticleFabricMixin",
+  "fapi.SoundEngineStreamFabricMixin", "fapi.LevelChunkUnloadFabricMixin", "fapi.LiquidOverlayFabricMixin"
+ ],
+ "injectors": {
+  "defaultRequire": 1,
+  "maxShiftBy": 3
+ }
+}

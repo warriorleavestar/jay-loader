@@ -1,0 +1,129 @@
+{
+ "_comment": "Fabric API 0.92.12+1.20.1 on Forge 47 (Amber's Fabric bridge for Forge, fabricbridge-forge.jar). Per module: veto = mixin classes not applied (their job done by a bridge adapter), strip = single injectors removed (re-based in the bridge). Every entry lands together with its replacement; see docs/fabric-on-forge-1.20.1-design.md.",
+ "modules": {
+  "fabric-events-interaction-v0": {
+   "version": "0.6.6", "package": "net.fabricmc.fabric.mixin.event.interaction",
+   "veto": ["ServerPlayNetworkHandlerMixin"],
+   "strip": [{"mixin": "client.MinecraftClientMixin", "handler": "injectUseEntityCallback", "reason": "captures startUseItem locals by position; Forge added its InteractionKeyMappingTriggered local. amber_fabric_bridge (Forge) MinecraftUseEntityFabricMixin takes them by type"},
+     {"mixin": "ServerPlayerInteractionManagerMixin", "handler": "breakBlock", "reason": "PlayerBlockBreakEvents.BEFORE at Block.playerWillDestroy in destroyBlock (local capture); Forge moved that call into its private removeBlock (onDestroyedByPlayer). Under strict require the miss excluded the whole mixin, with the attack / use block / use item hooks. amber_fabric_bridge (Forge) ServerBlockBreakFabricMixin: before Forge's two removeBlock calls"},
+     {"mixin": "ServerPlayerInteractionManagerMixin", "handler": "onBlockBroken", "reason": "AFTER at Block.destroy in destroyBlock; also inside Forge's removeBlock. ServerBlockBreakFabricMixin: on removeBlock's result"}],
+   "_notes": "ServerPlayNetworkHandlerMixin shadows val$target; Forge's ServerGamePacketListenerImpl$1 has val$entity. amber_fabric_bridge (Forge) ServerInteractEntityFabricMixin: the same two HEAD hooks."
+  },
+  "fabric-entity-events-v1": {
+   "version": "1.6.1", "package": "net.fabricmc.fabric.mixin.entity.event",
+   "strip": [{"mixin": "ServerPlayerEntityMixin", "handler": "onTrySleepDirectionCheck", "reason": "captures the Direction local of startSleepInBed by position; Forge's patch adds PlayerSleepInBedEvent locals. amber_fabric_bridge (Forge) ServerPlayerSleepDirectionFabricMixin takes it by type"},
+     {"mixin": "ServerPlayerEntityMixin", "handler": "redirectDaySleepCheck", "reason": "redirects Level.isDay() in startSleepInBed; Forge replaced that call with ForgeEventFactory.fireSleepingTimeCheck, so it matched nothing (silently under lenient require) and ALLOW_SLEEP_TIME never fired. amber_fabric_bridge (Forge) ServerPlayerSleepTimeFabricMixin redirects Forge's check instead"},
+     {"mixin": "PlayerEntityMixin", "handler": "redirectDaySleepCheck", "reason": "same isDay() redirect in Player.tick (wakes a sleeping player in daytime); Forge calls fireSleepingTimeCheck there too. Under strict require the dead redirect excluded all of PlayerEntityMixin. amber_fabric_bridge (Forge) PlayerSleepTickFabricMixin"},
+     {"mixin": "LivingEntityMixin", "handler": "onIsSleepingInBed", "method": "lambda$checkBedExists$9(Lnet/minecraft/core/BlockPos;)Ljava/lang/Boolean;", "reason": "vanilla's isSleepingInBed lambda (method_18405) is Forge's checkBedExists lambda $9 (calls fireSleepingLocationCheck; same (BlockPos)Boolean shape; the census fixer guessed $7). Under strict require the miss excluded all of LivingEntityMixin, and ServerPlayerEntityMixin extends it (sleep hooks gone)"},
+     {"mixin": "LivingEntityMixin", "handler": "modifyWakeUpPosition", "method": "lambda$stopSleeping$11(Lnet/minecraft/core/BlockPos;)V", "reason": "vanilla's stopSleeping lambda (method_18404) is $11 on Forge; its BedBlock.findStandUpPosition call is unchanged"},
+     {"mixin": "LivingEntityMixin", "handler": "modifyBedForOccupiedState", "method": "startSleeping(Lnet/minecraft/core/BlockPos;)V,lambda$stopSleeping$11(Lnet/minecraft/core/BlockPos;)V", "reason": "same lambda rename; the getBlockState it modifies (ALLOW_BED stand-in RED_BED) is unchanged in both methods"},
+     {"mixin": "LivingEntityMixin", "handler": "setOccupiedState", "reason": "redirects Level.setBlock(OCCUPIED) in startSleeping and the stopSleeping lambda; Forge calls BlockState.setBedOccupied there instead (whose default would set the ALLOW_BED stand-in RED_BED into the world). amber_fabric_bridge (Forge) LivingEntityBedFabricMixin"},
+     {"mixin": "LivingEntityMixin", "handler": "onGetSleepingDirection", "reason": "wraps BedBlock.getDirection in getBedOrientation; Forge calls BlockState.getBedDirection there. amber_fabric_bridge (Forge) LivingEntityBedFabricMixin wraps that"}]
+  },
+  "fabric-item-api-v1": {
+   "version": "2.1.29", "package": "net.fabricmc.fabric.mixin.item",
+   "veto": ["RecipeMixin", "AbstractFurnaceBlockEntityMixin", "BrewingStandBlockEntityMixin"],
+   "strip": [{"mixin": "ItemStackMixin", "handler": "hookGetAttributeModifiers", "reason": "redirects the stack-less Item.getDefaultAttributeModifiers in ItemStack.getAttributeModifiers; Forge asks IForgeItem.getAttributeModifiers(slot, stack) there. Under strict require the miss excluded the whole mixin (CustomDamageHandler hooks too). amber_fabric_bridge (Forge) ItemFabricExtensionMixin"},
+     {"mixin": "ItemStackMixin", "handler": "hookIsSuitableFor", "reason": "redirects the stack-less Item.isCorrectToolForDrops(state); Forge asks IForgeItem.isCorrectToolForDrops(stack, state). ItemFabricExtensionMixin"}],
+   "_notes": "Port of the NeoForge 1.21.1 entry. Forge's crafting (Recipe.getRemainingItems), furnace and brewing stand already ask the stack-aware ItemStack.has/getCraftingRemainingItem -> IForgeItem(stack), so Fabric's three remainder redirects of vanilla's stack-less calls have no targets (vetoed). amber_fabric_bridge (Forge) ItemFabricExtensionMixin: Item classes overriding FabricItem.getRecipeRemainder / getAttributeModifiers / isSuitableFor answer Forge's IForgeItem methods. ItemStackMixin's damage hooks (CustomDamageHandler) kept: Forge's hurtAndBreak still calls hurt(int, RandomSource, ServerPlayer)."
+  },
+  "fabric-key-binding-api-v1": {
+   "version": "1.0.38", "package": "net.fabricmc.fabric.mixin.client.keybinding",
+   "veto": ["GameOptionsMixin"],
+   "replaceImpl": true,
+   "_notes": "Fabric client init runs after Options exist on Forge (registration window), so the official impl throws. Re-based KeyBindingRegistryImpl (amber-impl) collects keys; amber_fabric_bridge (Forge) ForgeKeyMappingsFabricMixin hands them to Forge at the tail of ForgeHooksClient.onRegisterKeyMappings. KeyBindingAccessor kept."
+  },
+  "fabric-loot-tables-v1": {
+   "version": "1.1.47", "package": "net.fabricmc.fabric.mixin.loot.table",
+   "veto": ["LootTableMixin"],
+   "_notes": "Shadows LootTable.pools as LootPool[]; Forge 47 has pools:List. amber_fabric_bridge (Forge) LootTableSupplierFabricMixin implements FabricLootSupplier over the List."
+  },
+  "fabric-loot-api-v2": {
+   "version": "1.2.3", "package": "net.fabricmc.fabric.mixin.loot",
+   "strip": [{"mixin": "LootTableAccessor", "handler": "fabric_getPools", "invoker": "amber$fabricPools", "reason": "@Accessor pools:[LootPool; has no field on Forge (pools:List). Becomes @Invoker of amber$fabricPools, which amber_fabric_bridge (Forge) LootTablePoolsFabricMixin adds to LootTable (priority 900: merged before the accessor is generated)"}],
+   "_notes": "LootManagerMixin (kept) rebuilds every table after reload; the copies lose Forge's table id and freeze, so Forge mods' global loot modifiers (loot_table_id condition) stopped applying. amber_fabric_bridge (Forge) LootDataManagerTableIdFabricMixin restores both on lookup (getElement)."
+  },
+  "fabric-registry-sync-v0": {
+   "version": "2.4.1", "package": "net.fabricmc.fabric.mixin.registry.sync",
+   "veto": ["SaveLoadingMixin", "client.BlockColorsMixin", "client.ItemColorsMixin", "client.ParticleManagerMixin"],
+   "strip": [{"mixin": "RegistryLoaderMixin", "handler": "prependDirectoryWithNamespace", "reason": "Forge 47 patches RegistryDataLoader.registryDirPath to ForgeHooks.prefixNamespace (namespace/path for every non-minecraft registry); Fabric's RETURN inject prefixes the namespace again for registries from DynamicRegistries, so their JSON was looked up under data/<ns>/<ns>/<ns>/<path> and none loaded. Both use the same layout (data/<ns>/<ns>/<path>), so Forge's prefix alone is right"}],
+   "_notes": "SaveLoadingMixin swaps the worldgen registry list of WorldLoader.load for DynamicRegistries.getDynamicRegistries(), a copy of WORLDGEN_REGISTRIES made at Fabric init; on Forge that drops forge:biome_modifier etc. (DataPackRegistriesHooks, filled later) and the server can't start. amber_fabric_bridge (Forge) WorldLoaderDynamicRegistriesFabricMixin: Forge's list plus Fabric-registered dynamic registries. Open: DynamicRegistries.addSyncedRegistry reassigns RegistrySynchronization.NETWORKABLE_REGISTRIES (no mod in the test set calls it). client.BlockColorsMixin / ItemColorsMixin / ParticleManagerMixin hand vanilla's raw-id tables (IdMapper, Int2ObjectMap) to Fabric's id remapping; Forge keys colours by registry holder and particle providers by ResourceLocation, so there is nothing to remap (vetoed, no replacement)."
+  },
+  "fabric-screen-api-v1": {
+   "version": "2.0.9", "package": "net.fabricmc.fabric.mixin.screen",
+   "strip": [{"mixin": "GameRendererMixin", "handler": "onBeforeRenderScreen", "reason": "captures GameRenderer.render locals at Screen.renderWithTooltip; Forge moved that call into ForgeHooksClient.drawScreenInternal (the census fixer's retarget to drawScreen failed at runtime: LVT mismatch, first frame crashed). amber_fabric_bridge (Forge) ScreenRenderFabricMixin fires BEFORE_RENDER there"},
+     {"mixin": "GameRendererMixin", "handler": "onAfterRenderScreen", "reason": "same call site; ScreenRenderFabricMixin fires AFTER_RENDER"},
+     {"mixin": "KeyboardMixin", "handler": "beforeKeyPressedEvent", "reason": "targets vanilla's keyPress lambda (int, Screen, boolean[], int, int, int); Forge 47's lambda$keyPress$5 takes (int, boolean[], Screen, int, int, int). amber_fabric_bridge (Forge) ScreenKeyboardFabricMixin: same points on Forge's lambda"},
+     {"mixin": "KeyboardMixin", "handler": "afterKeyPressedEvent", "reason": "as beforeKeyPressedEvent"},
+     {"mixin": "KeyboardMixin", "handler": "beforeKeyReleasedEvent", "reason": "as beforeKeyPressedEvent"},
+     {"mixin": "KeyboardMixin", "handler": "afterKeyReleasedEvent", "reason": "as beforeKeyPressedEvent"},
+     {"mixin": "MinecraftClientMixin", "handler": "beforeScreenTick", "method": "lambda$tick$42()V", "reason": "Minecraft.tick's screen-tick lambda is lambda$tick$42 on Forge 47 (vanilla $38), same body"},
+     {"mixin": "MinecraftClientMixin", "handler": "afterScreenTick", "method": "lambda$tick$42()V", "reason": "as beforeScreenTick"}]
+  },
+  "fabric-rendering-v1": {
+   "version": "3.0.10", "package": "net.fabricmc.fabric.mixin.client.rendering",
+   "veto": ["BlockColorsMixin", "ItemColorsMixin", "shader.ShaderProgramMixin", "shader.ShaderProgramImportProcessorMixin"],
+   "_notes": "Port of the NeoForge entry. Colours: Forge 47 keeps BlockColors/ItemColors in Maps keyed by ForgeRegistries.BLOCKS/ITEMS.getDelegateOrThrow (vanilla: IdMapper, which Fabric's mixins shadow); amber_fabric_bridge (Forge) BlockColorsFabricMixin / ItemColorsFabricMixin answer ColorMapperHolder.get from the maps with the same key and initialize ColorProviderRegistry at the end of createDefault. Shaders: Forge's ShaderInstance already parses namespaced core shader ids (new ResourceLocation(name) -> <ns>:shaders/core/<path>.json, same for each stage) and resolves namespaced #moj_import through ForgeHooksClient.getShaderImportLocation, which is all Fabric's two shader mixins add to vanilla, so they are vetoed with nothing in their place. GameRendererMixin (CoreShaderRegistrationCallback) kept."
+  },
+  "fabric-particles-v1": {
+   "version": "1.1.3", "package": "net.fabricmc.fabric.mixin.client.particle",
+   "veto": ["BlockDustParticleMixin"],
+   "strip": [{"mixin": "ParticleManagerAccessor", "handler": "getFactories", "reason": "vanilla's Int2ObjectMap factories; Forge keys providers by ResourceLocation. Its only caller, DirectParticleFactoryRegistry, is replaced (amber-impl) and registers through ParticleEngine.register"}],
+   "replaceImpl": true,
+   "_notes": "Port of the NeoForge entry. BlockDustParticleMixin slices vanilla's !state.is(GRASS_BLOCK) tint check in the TerrainParticle constructor; Forge replaced it with IClientBlockExtensions.areBreakingParticlesTinted. amber_fabric_bridge (Forge) TerrainParticleFabricMixin ANDs ALLOW_BLOCK_DUST_TINT into Forge's check. ParticleManagerAccessor keeps the atlas and sprite-set accessors, ParticleManagerMixin (initialize at registerProviders RETURN) kept."
+  },
+  "fabric-lifecycle-events-v1": {
+   "version": "2.2.23", "package": "net.fabricmc.fabric.mixin.event.lifecycle",
+   "strip": [{"mixin": "client.WorldChunkMixin", "handler": "onRemoveBlockEntity(Ljava/util/Map;Ljava/lang/Object;)Ljava/lang/Object;", "reason": "Map.remove sliced from createBlockEntity in getBlockEntity; Forge 47 drops a removed block entity before the create path, so the slice is empty. amber_fabric_bridge (Forge) LevelChunkUnloadFabricMixin wraps Forge's first Map.remove there and fires the server or client BLOCK_ENTITY_UNLOAD"},
+             {"mixin": "server.WorldChunkMixin", "handler": "onRemoveBlockEntity(Ljava/util/Map;Ljava/lang/Object;)Ljava/lang/Object;", "reason": "same redirect for the server event, same empty slice (Mixin stops at the first dead injector on LevelChunk, so only the client one was reported); LevelChunkUnloadFabricMixin fires the server event"}],
+   "_notes": "Port of the NeoForge entry. Under strict require the whole client.WorldChunkMixin had been excluded, taking the client block-entity LOAD/UNLOAD events in setBlockEntity/removeBlockEntity with it; those two handlers are kept (they share the name onRemoveBlockEntity, so the strip names the descriptor). server.WorldChunkMixin keeps its setBlockEntity/removeBlockEntity handlers likewise."
+  },
+  "fabric-content-registries-v0": {
+   "version": "4.0.13", "package": "net.fabricmc.fabric.mixin.content.registry",
+   "strip": [{"mixin": "AbstractFurnaceBlockEntityMixin", "handler": "canUseAsFuelRedirect", "reason": "vanilla isFuel calls getFuel(); Forge 47's isFuel asks ForgeHooks.getBurnTime"},
+             {"mixin": "AbstractFurnaceBlockEntityMixin", "handler": "getFuelTimeRedirect", "reason": "vanilla getBurnDuration calls getFuel(); Forge 47's asks ForgeHooks.getBurnTime"}],
+   "_notes": "ForgeHooks.getBurnTime falls back to VANILLA_BURNS, which ForgeHooks.updateBurns refills from AbstractFurnaceBlockEntity.getFuel() on every tag reload; Fabric's fuelTimeMapHook (getFuel RETURN, kept) adds FuelRegistry entries there, removals as 0. Under strict require the whole mixin had been excluded and Fabric fuels were lost. FuelRegistry changes after the last tag reload show up at the next one (Fabric's own cache resets on tag reload too)."
+  },
+  "fabric-dimensions-v1": {
+   "version": "2.1.55", "package": "net.fabricmc.fabric.mixin.dimension",
+   "veto": ["RegistryCodecsMixin"],
+   "strip": [{"mixin": "EntityMixin", "handler": "stopEndSpecificBehavior", "reason": "redirects Level.END (End credits) in vanilla changeDimension(ServerLevel) on ServerPlayer and Entity; Forge 47 moved the body to changeDimension(ServerLevel, ITeleporter), where only ServerPlayer's reads Level.END, and Mixin checks require per target class (a retarget fails on Entity). amber_fabric_bridge (Forge) ServerPlayerEndFabricMixin does the redirect on ServerPlayer only"}],
+   "_notes": "Under strict require the whole EntityMixin had been excluded, so FabricDimensions.teleport lost its custom target (getTeleportTarget HEAD, kept: Forge's default ITeleporter.getPortalInfo still asks findDimensionEntryPoint). RegistryCodecsMixin wraps fullCodec's map in FailSoftMapCodec so a world keeps loading when a dimension's mod is gone; Forge 47's fullCodec already uses its own LenientUnboundedMapCodec (no Codec.unboundedMap call left), so it is vetoed with nothing in its place."
+  },
+  "fabric-model-loading-api-v1": {
+   "version": "1.0.4", "package": "net.fabricmc.fabric.mixin.client.model.loading",
+   "strip": [{"mixin": "ModelLoaderBakerImplMixin", "handler": "invokeModifyBeforeBake", "method": "bake(Lnet/minecraft/resources/ResourceLocation;Lnet/minecraft/client/resources/model/ModelState;Ljava/util/function/Function;)Lnet/minecraft/client/resources/model/BakedModel;", "reason": "vanilla ModelBakerImpl.bake(ResourceLocation, ModelState) holds getModel and the two bake calls; on Forge 47 it delegates to bake(.., Function<Material, TextureAtlasSprite>), which holds them, with the same leading arguments"},
+             {"mixin": "ModelLoaderBakerImplMixin", "handler": "invokeModifyAfterBake", "method": "bake(Lnet/minecraft/resources/ResourceLocation;Lnet/minecraft/client/resources/model/ModelState;Ljava/util/function/Function;)Lnet/minecraft/client/resources/model/BakedModel;", "reason": "as invokeModifyBeforeBake (both redirects of this name)"}],
+   "_notes": "Under strict require the whole ModelLoaderBakerImplMixin had been excluded (the census fixer's own retarget was refuted by its verifier), so ModelModifier.BeforeBake / AfterBake never ran. Retargeted by hand to Forge's three-argument bake."
+  },
+  "fabric-resource-conditions-api-v1": {
+   "version": "2.3.9", "package": "net.fabricmc.fabric.mixin.resource.conditions",
+   "strip": [{"mixin": "LootManagerMixin", "handler": "applyResourceConditions", "reason": "HEAD of vanilla's per-file lambda (LootDataType, Map, ResourceLocation, JsonElement); Forge's lambda$scheduleElementParse$4 also takes the ResourceManager, so the handler no longer matches. amber_fabric_bridge (Forge) LootConditionsFabricMixin does the same check there"},
+             {"mixin": "LootManagerMixin", "handler": "runAsync", "method": "lambda$scheduleElementParse$5(Lnet/minecraft/server/packs/resources/ResourceManager;Lnet/minecraft/world/level/storage/loot/LootDataType;Ljava/util/Map;)V", "reason": "vanilla's runAsync lambda; same shape on Forge under a Forge lambda name"},
+             {"mixin": "LootManagerMixin", "handler": "runAsyncEnd", "method": "lambda$scheduleElementParse$5(Lnet/minecraft/server/packs/resources/ResourceManager;Lnet/minecraft/world/level/storage/loot/LootDataType;Ljava/util/Map;)V", "reason": "as runAsync"}],
+   "_notes": "Under strict require the whole LootManagerMixin had been excluded: loot tables, predicates and item modifiers with \"fabric:load_conditions\" loaded whatever their conditions. runAsync/runAsyncEnd keep the registry access the conditions need on the loading thread."
+  },
+  "fabric-transfer-api-v1": {
+   "version": "3.3.6", "package": "net.fabricmc.fabric.mixin.transfer",
+   "veto": ["HopperBlockEntityMixin"],
+   "_notes": "Fabric's hopper hooks target vanilla insert(Level, BlockPos, BlockState, Container), which Forge 47 turned into ejectItems(.., HopperBlockEntity) behind VanillaInventoryCodeHooks.insertHook, and capture suckInItems' locals, where Forge stores the extractHook result first (local_capture). amber_fabric_bridge (Forge) HopperTransferFabricMixin runs the same logic after Forge's container lookups come back null: one item to or from ItemStorage.SIDED. Forge's own IItemHandler hooks run first, as on NeoForge. No Fabric Storage <-> Forge IItemHandler interop yet (NeoForge has TransferBridge)."
+  },
+  "fabric-sound-api-v1": {
+   "version": "1.0.14", "package": "net.fabricmc.fabric.mixin.client.sound",
+   "veto": ["SoundSystemMixin"],
+   "_notes": "Port of the NeoForge entry. Forge 47's SoundEngine.play streams through SoundInstance.getStream(library, sound, looping) (vanilla: SoundBufferLibrary.getStream, which Fabric redirects); amber_fabric_bridge (Forge) SoundEngineStreamFabricMixin routes FabricSoundInstance.getAudioStream overrides there. SoundInstanceMixin kept."
+  },
+  "fabric-tag-api-v1": {
+   "version": "1.3.0", "package": "net.fabricmc.fabric.mixin.tag",
+   "veto": ["TagFileMixin", "TagGroupLoaderMixin"],
+   "_notes": "Port of the NeoForge entry. Forge 47's TagFile record already has remove (JSON \"remove\"; Mixin can't add a second remove()) and its TagLoader applies removals after all packs' additions. amber_fabric_bridge (Forge) TagFileFabricMixin: TagFile implements FabricTagFile through Forge's accessor, the codec reads \"fabric:remove\" into \"remove\". Both Fabric mixins vetoed (one unit: TagGroupLoaderMixin would apply Forge's own removals a second time). TagEntryAccessor kept."
+  },
+  "fabric-rendering-fluids-v1": {
+   "version": "3.0.29", "package": "net.fabricmc.fabric.mixin.client.rendering.fluid",
+   "strip": [{"mixin": "FluidRendererMixin", "handler": "getOverlayBlock", "reason": "redirects vanilla's neighbour.getBlock() for the HalfTransparentBlock/LeavesBlock side-overlay check; Forge 47 asks BlockState.shouldDisplayFluidOverlay. amber_fabric_bridge (Forge) LiquidOverlayFabricMixin applies setBlockTransparency overrides there"},
+             {"mixin": "FluidRendererMixin", "handler": "modSideSpriteForOverlay", "reason": "as getOverlayBlock (uses the block it recorded)"}],
+   "replaceImpl": true,
+   "_notes": "Not a census failure: a runtime one (AIOOBE in LiquidBlockRenderer.tesselate as soon as lava is in view). Forge's tesselate reads sprites[2] (overlay, may be null); Fabric's FluidRendererMixin.modSpriteArray swaps in FluidRendererHookContainer.sprites, 2 slots. Re-based container (amber-impl): 3 slots, [2] = the handler's overlay or null. Under strict require the whole FluidRendererMixin had been excluded (first dead injector modSideSpriteForOverlay): no Fabric handler dispatch at all; the two overlay-block handlers are stripped, the rest (HEAD dispatch, sprite array, tint, water overlay sprite, lava check, reload) applies to Forge's tesselate."
+  }
+ }
+}

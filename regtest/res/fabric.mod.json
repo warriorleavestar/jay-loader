@@ -1,0 +1,3 @@
+{ "schemaVersion": 1, "id": "amber_regtest", "version": "0.1.0", "name": "Amber Registry/Network Test", "environment": "*",
+  "entrypoints": { "main": ["amber.regtest.RegTest"], "client": ["amber.regtest.RegTestClient"] },
+  "depends": { "fabricloader": ">=0.15", "minecraft": "1.21.1", "fabric-registry-sync-v0": "*", "fabric-networking-api-v1": "*" } }
