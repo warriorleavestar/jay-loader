@@ -76,7 +76,7 @@
 - [ ] 真机上手动：Forge 1.20.1 实例里放只标了 NeoForge 1.20.1 的模组（声明依赖 neoforge 的那种），能正常启动进世界、模组功能正常
 - [ ] 真机上手动：NeoForge 1.21.1 实例里放只出了 Forge 1.21.1 版的小模组（比如 Don't Cut Tripwire、Simple Harvesting、Soulbinding、Daily Expansion）：能进世界，模组功能正常（剪绊线不触发、右键收割、死亡后物品保留）
 - [ ] 真机上手动：放一个 Amber 还不支持的 Forge 1.21.1 模组（比如 Wildlife Expanded: Skunk）：界面上报 forge_api_missing，说明哪个模组、为什么，不会崩
-- [ ] 真机上手动（v1.3 接口）：Jay 用打包好的加载器文件夹（build/dist/amber-ul-0.3.0-proto）而不是开发构建目录启动三个平台；manifest 的 sha256 校验通过
+- [ ] 真机上手动（v1.3 接口）：Jay 用打包好的加载器文件夹（build/dist/amber-ul-0.3.0）而不是开发构建目录启动三个平台；manifest 的 sha256 校验通过
 - [ ] 真机上手动（v1.3 接口）：游戏里有 Mixin 被停用时，Jay 从 runtime-problems.jsonl 读到 mixin_incompatible，界面列出模组名；没有问题时文件只有第一行
 - [ ] 真机上手动（v1.3 接口）：选 Java 17 给 Forge 1.20.1 实例时，Jay 收到 java_too_old 并换到 21；第二次点"立即烘焙"时结果是 reused，不再跑 warm
 - [ ] 真机上手动：Forge 1.20.1 实例里放只出了 Quilt 版的小模组（比如 Feed the Bees）：能进世界，喂蜜蜂/做粘液球配方等功能正常

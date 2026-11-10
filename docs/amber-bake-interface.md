@@ -28,7 +28,7 @@ v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; **v1.3 2026-11-10**. Wr
 - **Forge production flag.** `FMLLoader.isProduction()` is `true` (what a player's launch is). `platform.production: false` turns on Forge's development behaviour; for debugging only.
 - **Launch-plugin host (Forge).** Mods that add a modlauncher `ILaunchPluginService` at runtime (ModernFix) are hosted by the loader. Nothing for Amber to do; listed so the launcher side knows Forge's own launcher is not involved.
 - **Deterministic bake outputs.** The same inputs give byte-identical baked jars (fixed entry times, sorted entries), so cache keys that hash earlier outputs are stable.
-- `loaderVersion` 0.3.0-proto. `protocol` stays 1: the cache layout under `cacheRoot` is unchanged, and old caches stay valid.
+- `loaderVersion` 0.3.0. `protocol` stays 1: the cache layout under `cacheRoot` is unchanged, and old caches stay valid.
 
 **Compatibility note for the launcher side.**
 - A v1 caller needs no change for the vanilla/Fabric base. New fields in results and the state file can be ignored.
@@ -72,7 +72,7 @@ v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; **v1.3 2026-11-10**. Wr
 - Every write goes to a temp file first and is then renamed atomically, so a killed process never leaves a corrupt cache.
 - `amber.ul.Bake version` prints:
   ```
-  {"loaderVersion":"0.3.0-proto","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
+  {"loaderVersion":"0.3.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
    "supportedMc":["1.20.1","1.21.1"],
    "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
@@ -168,7 +168,7 @@ v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; **v1.3 2026-11-10**. Wr
 `python -I tools/package.py` (after `bash build.sh`) writes `build/dist/amber-ul-<loaderVersion>/` and `build/dist/amber-ul-<loaderVersion>.zip` (the same folder, one top-level directory, fixed timestamps):
 
 ```
-amber-ul-0.3.0-proto/
+amber-ul-0.3.0/
   loader.jar          the loader
   libs/*.jar          its libraries (unmodified official jars; manifest.libs gives Maven coordinates + url)
   bridges/            fmlbridge.jar, fabricbridge.jar (NeoForge 1.21.1), fmlbridge-forge.jar, fabricbridge-forge.jar
