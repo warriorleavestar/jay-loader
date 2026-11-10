@@ -42,13 +42,14 @@ jobs:
       - name: Checksum
         run: |
           Z=$(python -I -c "import json; print(json.load(open('package.json'))['zip'])")
-          cp "$Z" . && N=$(basename "$Z") && sha256sum "$N" > "$N.sha256" && cat "$N.sha256"
+          # core-only (no bridges): named -core so it can never be mistaken for the full package amber-ul-<ver>.zip
+          N=$(basename "$Z" .zip)-core.zip && cp "$Z" "$N" && sha256sum "$N" > "$N.sha256" && cat "$N.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: package
           path: |
-            amber-ul-*.zip
-            amber-ul-*.zip.sha256
+            amber-ul-*-core.zip
+            amber-ul-*-core.zip.sha256
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -65,5 +66,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "Loader package (core; bridges are built separately)."
-          gh release upload "$GITHUB_REF_NAME" amber-ul-*.zip amber-ul-*.zip.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "amber-ul-<ver>-core.zip: loader core only (no bridges). The full package with the bridges is built locally and attached separately."
+          gh release upload "$GITHUB_REF_NAME" amber-ul-*-core.zip amber-ul-*-core.zip.sha256 --repo "$GITHUB_REPOSITORY" --clobber
