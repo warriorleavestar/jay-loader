@@ -35,7 +35,7 @@ public final class Discovery {
     }
 
     public Discovery(Path cacheDir, Map<String, String> builtins) throws IOException {
-        this.nestedDir = Files.createDirectories(cacheDir.resolve("nested")); this.builtins = builtins;
+        this.nestedDir = amber.ul.bake.CacheUse.ensureDir(cacheDir.resolve("nested")); this.builtins = builtins;
     }
 
     public List<ModInfo> discover(Path modsDir) throws IOException {
@@ -97,7 +97,7 @@ public final class Discovery {
                 String nsha = Hash.sha256(b);
                 if (visited.contains(nsha)) { nestedJars++; continue; }   // dedupe by content before recursing
                 Path out = amber.ul.bake.CacheUse.mark(amber.ul.bake.SafeFiles.under(nestedDir, nestedDir.resolve(nsha.substring(0, 32) + ".jar")));
-                if (!Files.exists(out)) { Path tmp = Files.createTempFile(nestedDir, "nest", ".tmp"); Files.write(tmp, b); amber.ul.bake.SafeFiles.publish(tmp, out); }
+                if (!Files.exists(out)) { Files.createDirectories(out.getParent()); Path tmp = Files.createTempFile(out.getParent(), "nest", ".tmp"); Files.write(tmp, b); amber.ul.bake.SafeFiles.publish(tmp, out); }
                 nestedJars++;
                 visit(out, owner.id, depth + 1, budget);
             }

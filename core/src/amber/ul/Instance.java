@@ -136,7 +136,7 @@ public final class Instance {
 
         // 3. game remap (once per MC version) + mod bakes (once per mod file)
         p.baker = new Baker(q.cacheRoot.resolve("baked"));
-        p.baker.context = Baker.context(q.client, q.libs);
+        p.baker.context = Baker.context(q.client, q.bakeLibs != null ? q.bakeLibs : q.libs);   // a launch from a state: the libraries the bake used, not the JVM class path (it adds the loader's own jars, so every mod missed)
         p.baker.obfGame = q.client; p.baker.libs = q.bakeLibs != null ? q.bakeLibs : q.libs;   // same graph key at bake and at launch
         p.mset = new Mappings.Set3(q.mappings);
         // vanilla: our tiny-remapper Mojmap jar; NeoForge: ART Mojmap jar + binpatches (its own cache key)
@@ -281,6 +281,7 @@ public final class Instance {
         for (Path c : cms) key.append('|').append(Hash.file(c));
         Path out = CacheUse.mark(in.resolveSibling(in.getFileName().toString().replace(".jar", "") + "-cm-" + Hash.str(key.toString()).substring(0, 12) + ".jar"));
         if (Files.exists(out)) return out;
+        Files.createDirectories(out.getParent());   // the overlay folder may not exist yet
         List<java.net.URL> urls = new ArrayList<>();
         for (Path c : cms) urls.add(c.toUri().toURL());
         urls.add(q.fmlBridge.toUri().toURL());
@@ -312,6 +313,7 @@ public final class Instance {
         for (Path c : srcs) key.append('|').append(Hash.file(c));
         Path out = CacheUse.mark(in.resolveSibling(in.getFileName().toString().replace(".jar", "") + "-fcm-" + Hash.str(key.toString()).substring(0, 12) + ".jar"));
         if (Files.exists(out)) return out;
+        Files.createDirectories(out.getParent());   // the overlay folder may not exist yet
         List<java.net.URL> urls = new ArrayList<>();
         urls.add(q.forgeBridge.toUri().toURL());
         for (Path l : p.forge.libraries) urls.add(l.toUri().toURL());
@@ -355,7 +357,7 @@ public final class Instance {
         for (Path j : forge) {
             String key = Hash.str(ForgeCompat.PIPELINE + "|" + Hash.file(shim) + "|" + Hash.file(j)).substring(0, 16);
             Path conv = dir.resolve(key + "-" + j.getFileName().toString().replace(' ', '_')), bad = conv.resolveSibling(conv.getFileName() + ".unresolved.txt");
-            CacheUse.mark(conv); CacheUse.mark(bad);
+            Path[] at = CacheUse.mark(conv, bad); conv = at[0]; bad = at[1];
             if (!Files.exists(conv) || !Files.exists(bad)) {
                 int n = ForgeCompat.convert(j, conv, shims);
                 if (platform == null) {

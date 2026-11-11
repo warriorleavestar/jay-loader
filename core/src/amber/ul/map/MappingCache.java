@@ -63,7 +63,7 @@ public final class MappingCache {
         long t0 = System.nanoTime();
         String key = t.key();
         Path dir = root.resolve(t.mc).resolve("graph"), amap = dir.resolve(key + ".amap"), rep = dir.resolve(key + ".report.json");
-        amber.ul.bake.CacheUse.mark(amap); amber.ul.bake.CacheUse.mark(rep);
+        Path[] at = amber.ul.bake.CacheUse.mark(amap, rep); amap = at[0]; rep = at[1];
         if (Files.isRegularFile(amap) && Files.isRegularFile(rep)) {
             try {
                 JsonObject r = JsonParser.parseString(Files.readString(rep, StandardCharsets.UTF_8)).getAsJsonObject();
@@ -95,6 +95,7 @@ public final class MappingCache {
             ms.addProperty("complete", Math.round((System.nanoTime() - a) / 1e6));
         }
         if ("true".equals(t.options.get("forgeRuntime"))) MapTool.deriveForgeRuntime(tree);
+        amap = amber.ul.bake.CacheUse.writeTarget(amap); rep = amber.ul.bake.CacheUse.writeTarget(rep); dir = amap.getParent();   // a corrupt shared graph is rebuilt in the overlay
         Files.createDirectories(dir);
         long w = System.nanoTime();
         Amap.write(tree, amap);
