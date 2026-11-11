@@ -76,7 +76,7 @@
 - [ ] 真机上手动：Forge 1.20.1 实例里放只标了 NeoForge 1.20.1 的模组（声明依赖 neoforge 的那种），能正常启动进世界、模组功能正常
 - [ ] 真机上手动：NeoForge 1.21.1 实例里放只出了 Forge 1.21.1 版的小模组（比如 Don't Cut Tripwire、Simple Harvesting、Soulbinding、Daily Expansion）：能进世界，模组功能正常（剪绊线不触发、右键收割、死亡后物品保留）
 - [ ] 真机上手动：放一个 Amber 还不支持的 Forge 1.21.1 模组（比如 Wildlife Expanded: Skunk）：界面上报 forge_api_missing，说明哪个模组、为什么，不会崩
-- [ ] 真机上手动（v1.3 接口）：Jay 用打包好的加载器文件夹（build/dist/amber-ul-0.3.1）而不是开发构建目录启动三个平台；manifest 的 sha256 校验通过
+- [ ] 真机上手动（v1.3 接口）：Jay 用打包好的加载器文件夹（build/dist/amber-ul-0.3.2）而不是开发构建目录启动三个平台；manifest 的 sha256 校验通过
 - [ ] 真机上手动（v1.3 接口）：游戏里有 Mixin 被停用时，Jay 从 runtime-problems.jsonl 读到 mixin_incompatible，界面列出模组名；没有问题时文件只有第一行
 - [ ] 真机上手动（v1.3 接口）：选 Java 17 给 Forge 1.20.1 实例时，Jay 收到 java_too_old 并换到 21；第二次点"立即烘焙"时结果是 reused，不再跑 warm
 - [ ] 真机上手动：Forge 1.20.1 实例里放只出了 Quilt 版的小模组（比如 Feed the Bees）：能进世界，喂蜜蜂/做粘液球配方等功能正常
@@ -85,3 +85,7 @@
 
 - [ ] 真机上手动（2026-11-11 lambda 修复）：Jay 里 NeoForge 1.21.1 实例装 Visuality + Cloth Config + Fabric API 0.116.18：能进世界，不再报 lambda$tick$32；打开/关闭界面、按键、鼠标点击界面都正常（Fabric 界面事件），睡床正常（实体事件里的 lambda）
 - [ ] 真机上手动（2026-11-11 forgecompat-2）：Jay 里 NeoForge 1.21.1 实例装 Wildlife Expanded: Skunk（Forge 1.21.1 版）：能进世界；臭鼬能生成、能骑到肩上（能力 skunk:shouldermobs），退出重进后肩上的还在；局域网/服务器上另一个玩家能看到肩上的臭鼬（SimpleChannel 同步）；日志里 8 条 armor_material 覆盖警告属正常
+
+# 沙盒启动（0.3.2，sandbox-paths）
+
+- [ ] 真机上手动：Jay 在只给实例目录写权限的沙盒里启动三个平台（共享 cacheRoot/mappingCache 只读）；能进世界，共享缓存不变，.amber-ul/cache-overlay 只在 warm 前缺东西时出现
