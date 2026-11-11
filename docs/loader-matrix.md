@@ -60,9 +60,17 @@ Results (`mc/mods-nf-forge1211`: four Forge-only 1.21.1 mods from `mc/dl-forge12
   - census m5s: 11 / 0 / 15, unchanged.
   - census ffp strict: 31 failing / 6 excluded, unchanged.
   - in-world `rgnf` (5-mod NeoForge + Fabric) and `rgw` (Fabric base): see the commit.
-- Wildlife Expanded: Skunk is refused with `forge_api_missing`. It needs Forge capabilities, Forge networking and spawn-placement events, which the shim does not provide. That is the boundary of this layer: small mods that use events, registries, configs and ticks.
+- Wildlife Expanded: Skunk was refused with `forge_api_missing` (Forge capabilities, Forge networking, spawn-placement events). Covered since forgecompat-2, below.
 
-Not covered yet: Forge capabilities (`ICapabilityProvider`, `LazyOptional`), Forge `SimpleChannel` networking, `ForgeRegistries` beyond the vanilla registries, Forge-only events NeoForge removed, and access transformers in Forge format (`META-INF/accesstransformer.cfg` is read by NeoForge too, but entries naming Forge classes would not match).
+### forgecompat-2 (2026-11-11): capabilities, SimpleChannel, Forge-only events (pipeline forgecompat-6)
+- **Capabilities.** The shim has `Capability`, `CapabilityManager`, `CapabilityToken`, `ICapabilityProvider`, `ICapabilitySerializable`, `RegisterCapabilitiesEvent`, `AttachCapabilitiesEvent`, `LazyOptional` and the `NonNull*` functional interfaces. Capabilities live in one NeoForge data attachment (`amber_forgecompat:forge_caps`) on entities, block entities, chunks and levels. `AttachCapabilitiesEvent` is posted the first time an object's capabilities are asked for. Serializable providers are saved and restored with the attachment. The converter turns `getCapability`/`reviveCaps`/`invalidateCaps` calls on vanilla classes into static calls into the shim (`super.` calls to the Forge default), adds `ICapabilityProvider` to mod classes that override `getCapability`, and guards each `AttachCapabilitiesEvent<X>` handler by its generic type.
+- **Networking.** `ChannelBuilder`, `SimpleChannel` (`messageBuilder` … `encoder`/`decoder`/`consumerMainThread`/`add`, `send`) and `CustomPayloadEvent.Context` run over one NeoForge payload type (`amber_forgecompat:simplechannel`) that carries channel id + message id.
+- **Events and hooks.** `SpawnPlacementRegisterEvent` → `RegisterSpawnPlacementsEvent`, `MobSpawnEvent.FinalizeSpawn` → `FinalizeSpawnEvent`, `ForgeEventFactory` → `EventHooks`, `ForgeSpawnEggItem` → `DeferredSpawnEggItem`, `DistExecutor`; Forge's `canEquip(…, Entity)` and `canApplyAtEnchantingTable` item hooks.
+- **NeoForge strictness.** `@EventBusSubscriber` on a class without `@SubscribeEvent` methods is dropped (NeoForge throws, Forge ignored it). Static `Registry.register`/`registerForHolder` calls go through `RegistryHooks`: Forge allowed overriding an existing name, NeoForge throws "duplicate key". A name that already exists keeps its current entry and a warning is logged, so the override itself is not applied.
+- `nff5`, NeoForge 1.21.1 + the 5 Forge mods including Skunk + nfworldtest: in world 35 s, clean shutdown. Skunk's `skunk:shouldermobs` capability is attached to the server and the client player; its 8 vanilla armor-material re-registrations are kept as the vanilla entries (warning each).
+- `nff5off`, control with the converter off: refused at once (missing_dep "needs forge", exit 2).
+
+Not covered yet: `ForgeRegistries` beyond the vanilla registries, registry overrides (kept as the existing entry), Forge-only events beyond those listed, and access transformers in Forge format (`META-INF/accesstransformer.cfg` is read by NeoForge too, but entries naming Forge classes would not match).
 
 ## Item 3: Quilt mods on every platform (done for mods using the basic Quilt API)
 

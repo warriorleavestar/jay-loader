@@ -29,12 +29,17 @@ import org.objectweb.asm.commons.Remapper;
  */
 public final class ForgeCompat {
     private ForgeCompat() {}
-    public static final String PIPELINE = "forgecompat-3";
+    public static final String PIPELINE = "forgecompat-6";
     public static final String SHIM = "amber/forgecompat/";
     static final String FORGE = "net/minecraftforge/";
 
     /** Package/class rules, most specific first: Forge internal name prefix -> NeoForge prefix. */
     static final String[][] RULES = {
+        // classes NeoForge renamed (same API)
+        {"net/minecraftforge/event/entity/SpawnPlacementRegisterEvent", "net/neoforged/neoforge/event/entity/RegisterSpawnPlacementsEvent"},
+        {"net/minecraftforge/event/entity/living/MobSpawnEvent$FinalizeSpawn", "net/neoforged/neoforge/event/entity/living/FinalizeSpawnEvent"},
+        {"net/minecraftforge/event/ForgeEventFactory", "net/neoforged/neoforge/event/EventHooks"},
+        {"net/minecraftforge/common/ForgeSpawnEggItem", "net/neoforged/neoforge/common/DeferredSpawnEggItem"},
         {"net/minecraftforge/fml/common/Mod$EventBusSubscriber$Bus", "net/neoforged/fml/common/EventBusSubscriber$Bus"},
         {"net/minecraftforge/fml/common/Mod$EventBusSubscriber", "net/neoforged/fml/common/EventBusSubscriber"},
         {"net/minecraftforge/common/MinecraftForge", "net/neoforged/neoforge/common/NeoForge"},
@@ -57,6 +62,7 @@ public final class ForgeCompat {
     static final Map<String, String> MEMBERS = Map.of(
         "net/minecraftforge/event/entity/player/BonemealEvent.getBlock()Lnet/minecraft/world/level/block/state/BlockState;", "getState",
         "net/minecraftforge/event/entity/player/BonemealEvent.getEntity()Lnet/minecraft/world/entity/player/Player;", "getPlayer",
+        "net/minecraftforge/client/event/EntityRenderersEvent$AddLayers.getPlayerSkin(Lnet/minecraft/client/resources/PlayerSkin$Model;)Lnet/minecraft/client/renderer/entity/EntityRenderer;", "getSkin",
         "net/minecraftforge/event/entity/player/BonemealEvent.getStack()Lnet/minecraft/world/item/ItemStack;", "getStack");
 
     /** True when a jar's metadata is a Forge 52 mod (mods.toml, no neoforge.mods.toml). */
@@ -100,7 +106,7 @@ public final class ForgeCompat {
                 else if (n.endsWith(".class") && !n.startsWith("META-INF/versions/")) {
                     ClassReader cr = new ClassReader(b);
                     ClassWriter cw = new ClassWriter(0);
-                    cr.accept(new ClassRemapper(new BusEnum(new ModCtorBridge(cw, isMod(cr))), rm), 0);
+                    cr.accept(new ClassRemapper(new BusEnum(BusEnum.hasSubscribers(cr), new ModCtorBridge(new CapCalls(cw, CapCalls.declaresGetCap(cr)), isMod(cr))), rm), 0);
                     byte[] nb = cw.toByteArray();
                     if (!Arrays.equals(nb, b)) changed++;
                     b = nb;
@@ -112,9 +118,28 @@ public final class ForgeCompat {
         return changed;
     }
 
-    /** {@code EventBusSubscriber.Bus.FORGE} is called GAME on NeoForge (runs after the remap, so it sees NeoForge's name). */
+    /**
+     * {@code EventBusSubscriber.Bus.FORGE} is called GAME on NeoForge (runs after the remap, so it sees NeoForge's name).
+     * Also drops {@code @EventBusSubscriber} from a class with no {@code @SubscribeEvent} method: Forge registers nothing,
+     * NeoForge throws "has no @SubscribeEvent methods, but register was called anyway" and the mod fails to load.
+     */
     static final class BusEnum extends ClassVisitor {
-        BusEnum(ClassVisitor cv) { super(Opcodes.ASM9, cv); }
+        final boolean subscribers;
+        BusEnum(boolean subscribers, ClassVisitor cv) { super(Opcodes.ASM9, cv); this.subscribers = subscribers; }
+        static boolean hasSubscribers(ClassReader cr) {
+            boolean[] found = {false};
+            cr.accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override public MethodVisitor visitMethod(int a, String n, String d, String sig, String[] ex) {
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+                            if (desc.endsWith("/SubscribeEvent;")) found[0] = true;
+                            return null;
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            return found[0];
+        }
         static AnnotationVisitor wrap(AnnotationVisitor av) {
             return av == null ? null : new AnnotationVisitor(Opcodes.ASM9, av) {
                 @Override public void visitEnum(String name, String desc, String value) {
@@ -124,7 +149,121 @@ public final class ForgeCompat {
                 @Override public AnnotationVisitor visitArray(String name) { return wrap(super.visitArray(name)); }
             };
         }
-        @Override public AnnotationVisitor visitAnnotation(String desc, boolean visible) { return wrap(super.visitAnnotation(desc, visible)); }
+        @Override public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+            if (!subscribers && desc.equals("Lnet/neoforged/fml/common/EventBusSubscriber;")) return null;
+            return wrap(super.visitAnnotation(desc, visible));
+        }
+    }
+
+    static final String CAPS = SHIM + "amber_internal/Caps", ITEM_HOOKS = SHIM + "amber_internal/ItemHooks";
+    /** Forge registry overrides (re-registering an existing name): see the shim's RegistryHooks. */
+    static final String REGISTRY_HOOKS = SHIM + "amber_internal/RegistryHooks";
+    static final String CAP = "L" + SHIM + "common/capabilities/Capability;", LAZY = "L" + SHIM + "common/util/LazyOptional;";
+    static final String CAP_PROVIDER = SHIM + "common/capabilities/ICapabilityProvider";
+    static final String ATTACH_EVENT = SHIM + "event/AttachCapabilitiesEvent";
+    static final String GET_CAP_SIDED = "getCapability(" + CAP + "Lnet/minecraft/core/Direction;)" + LAZY;
+    static final String CAN_EQUIP_FORGE = "canEquip(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/entity/EquipmentSlot;Lnet/minecraft/world/entity/Entity;)Z";
+    static final String CAN_EQUIP_NEO = "(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/entity/EquipmentSlot;Lnet/minecraft/world/entity/LivingEntity;)Z";
+    /**
+     * Methods Forge patched into vanilla classes that NeoForge lacks (name + descriptor, shim names) -> {forgecompat class,
+     * target for a normal call, target for a super call}. The targets are static and take the receiver first.
+     */
+    static final Map<String, String[]> REDIRECTS = Map.of(
+        "getCapability(" + CAP + ")" + LAZY, new String[]{CAPS, "getCapability", "superGetCapability"},
+        GET_CAP_SIDED, new String[]{CAPS, "getCapability", "superGetCapability"},
+        "reviveCaps()V", new String[]{CAPS, "reviveCaps", "reviveCaps"},
+        "invalidateCaps()V", new String[]{CAPS, "invalidateCaps", "invalidateCaps"},
+        CAN_EQUIP_FORGE, new String[]{ITEM_HOOKS, "canEquip", "superCanEquip"},
+        "canApplyAtEnchantingTable(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/item/enchantment/Enchantment;)Z",
+            new String[]{ITEM_HOOKS, "canApplyAtEnchantingTable", "superCanApplyAtEnchantingTable"});
+
+    /**
+     * Forge hooks patched into vanilla classes (runs after the remap, so it sees shim names):
+     * <ul>
+     * <li>calls of {@link #REDIRECTS} methods on a net/minecraft owner become static calls into forgecompat;</li>
+     * <li>static {@code Registry.register/registerForHolder} calls go to {@link #REGISTRY_HOOKS} (Forge allowed overrides);</li>
+     * <li>a class that overrides Forge's {@code getCapability(Capability, Direction)} (an entity or block entity of the mod)
+     *     also implements forgecompat's ICapabilityProvider, so forgecompat's Caps calls the override;</li>
+     * <li>a class that overrides Forge's {@code canEquip(ItemStack, EquipmentSlot, Entity)} gets NeoForge's
+     *     {@code canEquip(ItemStack, EquipmentSlot, LivingEntity)} calling it, so NeoForge's hook reaches the override;</li>
+     * <li>an {@code AttachCapabilitiesEvent<X>} handler (Forge's GenericEvent, filtered by X) gets a check at its start:
+     *     NeoForge's bus has no generic events, so it returns unless the event's type is X.</li>
+     * </ul>
+     */
+    static final class CapCalls extends ClassVisitor {
+        String name; final boolean getCap; boolean canEquipForge, canEquipNeo;
+        CapCalls(ClassVisitor cv, boolean getCap) { super(Opcodes.ASM9, cv); this.getCap = getCap; }
+        @Override public void visit(int v, int a, String n, String s, String sup, String[] itf) {
+            name = n;
+            if (getCap && (a & Opcodes.ACC_INTERFACE) == 0 && (itf == null || !Arrays.asList(itf).contains(CAP_PROVIDER))) {
+                itf = itf == null ? new String[]{CAP_PROVIDER} : Arrays.copyOf(itf, itf.length + 1);
+                itf[itf.length - 1] = CAP_PROVIDER;
+                if (s != null) s = s + "L" + CAP_PROVIDER + ";";
+            }
+            super.visit(v, a, n, s, sup, itf);
+        }
+        /** Declares Forge's getCapability(Capability, Direction) (pre-remap: Forge names). */
+        static boolean declaresGetCap(ClassReader cr) {
+            boolean[] m = {false};
+            cr.accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override public MethodVisitor visitMethod(int a, String n, String d, String s, String[] x) {
+                    if ((a & Opcodes.ACC_STATIC) == 0 && n.equals("getCapability") && d.equals("(Lnet/minecraftforge/common/capabilities/Capability;Lnet/minecraft/core/Direction;)Lnet/minecraftforge/common/util/LazyOptional;")) m[0] = true;
+                    return null;
+                }
+            }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            return m[0];
+        }
+        @Override public void visitEnd() {
+            if (canEquipForge && !canEquipNeo) {
+                MethodVisitor mv = super.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_SYNTHETIC, "canEquip", CAN_EQUIP_NEO, null, null);
+                mv.visitCode();
+                for (int i = 0; i < 4; i++) mv.visitVarInsn(Opcodes.ALOAD, i);
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, name, "canEquip", CAN_EQUIP_FORGE.substring("canEquip".length()), false);
+                mv.visitInsn(Opcodes.IRETURN);
+                mv.visitMaxs(4, 4);
+                mv.visitEnd();
+            }
+            super.visitEnd();
+        }
+        @Override public MethodVisitor visitMethod(int a, String n, String d, String s, String[] x) {
+            if ((a & Opcodes.ACC_STATIC) == 0) {
+                if (CAN_EQUIP_FORGE.equals(n + d)) canEquipForge = true;
+                if (n.equals("canEquip") && d.equals(CAN_EQUIP_NEO)) canEquipNeo = true;
+            }
+            String guard = null;
+            if (s != null && d.equals("(L" + ATTACH_EVENT + ";)V")) {
+                Matcher m = Pattern.compile("^\\(L" + Pattern.quote(ATTACH_EVENT) + "<L([^;<]+)(?:<.*>)?;>;\\)V$").matcher(s);
+                if (m.matches()) guard = m.group(1);
+            }
+            final String g = guard; final int slot = (a & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
+            return new MethodVisitor(Opcodes.ASM9, super.visitMethod(a, n, d, s, x)) {
+                @Override public void visitCode() {
+                    super.visitCode();
+                    if (g == null) return;
+                    Label ok = new Label();
+                    super.visitVarInsn(Opcodes.ALOAD, slot);
+                    super.visitMethodInsn(Opcodes.INVOKEVIRTUAL, ATTACH_EVENT, "getGenericType", "()Ljava/lang/reflect/Type;", false);
+                    super.visitLdcInsn(Type.getObjectType(g));
+                    super.visitJumpInsn(Opcodes.IF_ACMPEQ, ok);
+                    super.visitInsn(Opcodes.RETURN);
+                    super.visitLabel(ok);
+                    super.visitFrame(Opcodes.F_SAME, 0, null, 0, null);
+                }
+                @Override public void visitMaxs(int stack, int locals) { super.visitMaxs(g == null ? stack : Math.max(stack, 2), locals); }
+                @Override public void visitMethodInsn(int op, String owner, String name, String desc, boolean itf) {
+                    String[] r = owner.startsWith("net/minecraft/") ? REDIRECTS.get(name + desc) : null;
+                    if (r != null && op != Opcodes.INVOKESTATIC) {
+                        super.visitMethodInsn(Opcodes.INVOKESTATIC, r[0], op == Opcodes.INVOKESPECIAL ? r[2] : r[1], "(Ljava/lang/Object;" + desc.substring(1), false);
+                        return;
+                    }
+                    if (op == Opcodes.INVOKESTATIC && owner.equals("net/minecraft/core/Registry") && (name.equals("register") || name.equals("registerForHolder"))) {
+                        super.visitMethodInsn(Opcodes.INVOKESTATIC, REGISTRY_HOOKS, name, desc, false);   // same erased descriptors
+                        return;
+                    }
+                    super.visitMethodInsn(op, owner, name, desc, itf);
+                }
+            };
+        }
     }
 
     static final String FMLJ_CTX = SHIM + "fml/javafmlmod/FMLJavaModLoadingContext";
@@ -249,6 +388,25 @@ public final class ForgeCompat {
             }
             return false;
         }
+        /**
+         * Like {@link #member} but three-valued: FALSE only when the whole super/interface chain is in the index (or the JDK)
+         * and none declares the member; null when some super is unknown (e.g. a library class outside the index).
+         */
+        Boolean find(String owner, String key) {
+            Deque<String> todo = new ArrayDeque<>(List.of(owner)); Set<String> seen = new HashSet<>(); boolean unknown = false;
+            while (!todo.isEmpty()) {
+                String c = todo.pop();
+                if (!seen.add(c)) continue;
+                if (c.startsWith("[")) return true;
+                if (c.startsWith("java/")) { if (jdk(c, key)) return true; continue; }
+                C k = classes.get(c);
+                if (k == null) { unknown = true; continue; }
+                if (k.members.contains(key)) return true;
+                if (k.sup != null) todo.add(k.sup);
+                todo.addAll(Arrays.asList(k.itf));
+            }
+            return unknown ? null : false;
+        }
         /** A member inherited from a JDK class (java.lang.Object, Record, Enum ...), looked up on the running JDK. */
         static boolean jdk(String c, String key) {
             try {
@@ -285,6 +443,12 @@ public final class ForgeCompat {
                         type(d);
                         return new MethodVisitor(Opcodes.ASM9) {
                             void mem(String owner, String key) {
+                                // game classes: Forge patched methods into some (capabilities, ...); NeoForge has different
+                                // ones. Only a definite miss counts (the class and all its supers known, member not there).
+                                if (owner.startsWith("net/minecraft/") && platform.has(owner)) {
+                                    if (Boolean.FALSE.equals(platform.find(owner, key))) bad.add(owner + "." + key);
+                                    return;
+                                }
                                 if (!checked(owner)) return;
                                 if (!platform.has(owner) && !own.has(owner)) { bad.add("class " + owner); return; }
                                 if (!platform.member(owner, key) && !own.member(owner, key)) bad.add(owner + "." + key);
