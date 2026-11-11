@@ -2,6 +2,16 @@
 
 v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; **v1.3.1 2026-11-11**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
 
+## Bake-time mixin pass (NeoForge platform, 2026-11-11)
+
+Before this, Amber only fixed Fabric mixins that fail on the NeoForge-patched game after a census of that exact mod set (the fixes are keyed by every mod's sha). A new mod set (any Jay instance) got no fixes. For example, Fabric API's screen-tick mixin targets `Minecraft.lambda$tick$32`, which NeoForge's patches renumber to `lambda$tick$35`, so the launch crashed.
+
+Now `bake-instance`, `warm` and every launch run a static pass for each baked Fabric/Quilt mod. It is cached under `<cacheRoot>/lambda-retarget/` per mod jar, game and pass version, so it runs once:
+- **Lambdas.** A selector naming a game lambda is matched against the patched class. It matches by outer method, descriptor and body (call/field references, then the opcode sequence), never by the number, and is retargeted. If the name is gone and there is no unique match, or the match lacks the injector's @At point, you get `mixin_lambda_unresolved` at bake time. Mixins that the Fabric API bridge manifest vetoes or strips are skipped.
+- **Other moved targets.** An injector whose method or @At(INVOKE/FIELD) point is gone from the patched method goes through the census fixer's analysis: moved into a new method or lambda, delegating overload, call replaced, instance-to-static. If nothing fits, you get `mixin_target_changed` (warning).
+
+Test switch: `-Damber.ul.noLambdaRetarget=true`.
+
 ## Changelog
 
 **v1.3.1 (2026-11-11).** Additive. `interface` stays `"1.3"`, so consumers that check it keep working. `protocol` stays 1. New:
@@ -95,7 +105,7 @@ v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; **v1.3
   When `protocol` changes, Amber should treat old caches as invalid. `interface` changes on additive revisions only.
 - Every request and response carries `"schema":"amber-ul/<name>@1"` (for example `amber-ul/bake-mod-request@1`). An unknown schema name is an error. v1.1 keeps the `@1` schemas: its fields are optional additions.
 - Errors with their own code: `bad_request`, `unknown_stage`, `stale_state`, `java_too_old` (v1.3), `internal`.
-- Problem lines carry a stable `code` field. Amber uses it to hook into its existing mismatch UI and "find a matching version". Codes: `missing_dep`, `version_mismatch`, `incompatible_loader` (also: platform not supported on that game version), `incompatible_mc`, `conflict` (breaks/conflicts), `duplicate_mod`, `nested_unresolved`, `unsupported_feature`, and (loader matrix, added after v1.3, additive) `forge_api_missing` (a Forge 1.21.1 mod on NeoForge uses Forge APIs Amber's compat layer lacks) and `quilt_api_missing` (a Quilt mod uses Quilt APIs Amber lacks); both are errors, the mod is not loaded, and `message` names the first missing references. Amber should treat an unknown code like `unsupported_feature`. Every problem carries `modId` and `file`; dependency problems also carry `dependency:{id, range, found?}`.
+- Problem lines carry a stable `code` field. Amber uses it to hook into its existing mismatch UI and "find a matching version". Codes: `missing_dep`, `version_mismatch`, `incompatible_loader` (also: platform not supported on that game version), `incompatible_mc`, `conflict` (breaks/conflicts), `duplicate_mod`, `nested_unresolved`, `unsupported_feature`, and (loader matrix, added after v1.3, additive) `forge_api_missing` (a Forge 1.21.1 mod on NeoForge uses Forge APIs Amber's compat layer lacks) and `quilt_api_missing` (a Quilt mod uses Quilt APIs Amber lacks); both are errors, the mod is not loaded, and `message` names the first missing references. Also additive: `mixin_lambda_unresolved` (error: on NeoForge, a Fabric/Quilt mixin names a game lambda that the NeoForge-patched class no longer has, and no unique same-shape lambda exists; Mixin would fail at launch) and `mixin_target_changed` (warning: an injector's method or @At point is gone in the patched game and the bake-time fixer could not move it; the launch may fail). See "Bake-time mixin pass" below. Amber should treat an unknown code like `unsupported_feature`. Every problem carries `modId` and `file`; dependency problems also carry `dependency:{id, range, found?}`.
 
 ## Preparation stage: requirements (once per game version and platform)
 

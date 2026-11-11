@@ -50,6 +50,9 @@ public final class Instance {
         public final Map<String, String> builtins = new LinkedHashMap<>();
         public List<Resolver.Problem> problems = List.of();
         public Mappings.Set3 mset; public Baker baker; public Path bakedGame, namedGame;
+        /** Bake-time lambda retargets (mixin class resource -> fixed bytes), served by the class loader. */
+        public final Map<String, byte[]> lambdaFixes = new LinkedHashMap<>();
+        public String lambdaFingerprint = "-";
         public long tDiscover, tResolve, tBake;   // ns
         public int gameLibs;
         public NeoForgePlatform neoforge;   // non-null when the NeoForge platform layer is active
@@ -173,6 +176,7 @@ public final class Instance {
         if (p.forge != null && q.forgeBridge != null && !Boolean.getBoolean("amber.ul.noForgeCoreMods")) p.namedGame = applyForgeCoreMods(p, q, p.namedGame);
         p.bakedGame = p.baker.bakeGame(p.namedGame, p.rules, Launcher.hookTable(q.mc));
         p.jars.add(0, p.bakedGame);
+        if (p.neoforge != null && !Boolean.getBoolean("amber.ul.noLambdaRetarget")) lambdaRetarget(q, p);
         // Game libraries (DFU, Brigadier, authlib, LWJGL, netty ...) also live in the universal loader, as with Fabric's Knot,
         // so mixins can target them. Logging stays parent-only (one log4j/slf4j for loader and game).
         Path libRoot = q.libRoot != null ? q.libRoot.toAbsolutePath().normalize()
@@ -193,6 +197,59 @@ public final class Instance {
         }
         p.tBake = System.nanoTime() - t2;
         return p;
+    }
+
+    /**
+     * Fabric/Quilt mixins naming a game lambda ({@code lambda$tick$32}) on the NeoForge platform: NeoForge's patches renumber
+     * a class's lambdas, so the name can be gone or point at another lambda. MixinFixer's lambda pass matches each one by
+     * outer method, descriptor and body against the patched game and retargets the selector at bake time (no census of the
+     * mod set needed). Cached per baked mod jar + game. A lambda that cannot be matched is a bake problem
+     * {@code mixin_lambda_unresolved} instead of a Mixin crash at launch. Test switch: -Damber.ul.noLambdaRetarget=true.
+     */
+    static void lambdaRetarget(Request q, Prepared p) throws Exception {
+        Path dir = q.cacheRoot.resolve("lambda-retarget");
+        Path clean = p.neoforge.srg, patched = p.namedGame;   // clean Mojmap game / patched + coremods (lambdas are not touched by access rules)
+        StringBuilder fp = new StringBuilder(MixinFixer.LAMBDA_PASS);
+        int retargeted = 0;
+        // injectors the Fabric API bridge manifest or a compat rule already takes out (vetoed mixin, stripped/dropped handler):
+        // their lambda does not matter at launch
+        BridgeManifest bm = BridgeManifest.load("neoforge", q.mc, p.baked);
+        Set<String> gone = new HashSet<>(bm.veto.keySet());
+        for (BridgeManifest.Strip s : bm.strips) gone.add(s.mixin() + "#" + s.handler());
+        try (var in = Launcher.class.getResourceAsStream("/amber-ul/compat/neoforge-" + q.mc + ".json")) {
+            if (in != null) for (var e : com.google.gson.JsonParser.parseString(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonArray("rules")) {
+                var r = e.getAsJsonObject();
+                if ("drop_injector".equals(r.get("via").getAsString())) gone.add(r.get("mixin").getAsString() + "#" + r.get("handler").getAsString());
+            }
+        }
+        for (ModInfo m : p.baked) {
+            if ((m.kind != LoaderKind.FABRIC && m.kind != LoaderKind.QUILT) || m.mixinConfigs.isEmpty()) continue;
+            String key = Hash.str(MixinFixer.LAMBDA_PASS + "|" + m.jar.getFileName() + "|" + m.sha256 + "|" + patched.getFileName() + "|" + clean.getFileName()).substring(0, 20);
+            Path out = CacheUse.mark(dir.resolve(key + ".jar"));
+            if (!Files.exists(out)) MixinFixer.lambdaPass(clean, patched, m.jar, out);
+            try (var jf = new java.util.jar.JarFile(out.toFile(), false)) {
+                for (var e : java.util.Collections.list(jf.entries())) {
+                    byte[] b = jf.getInputStream(e).readAllBytes();
+                    if (e.getName().endsWith(".class")) { p.lambdaFixes.put(e.getName(), b); fp.append('|').append(key); continue; }
+                    if (!e.getName().equals("amber-lambda.json")) continue;
+                    for (var el : com.google.gson.JsonParser.parseString(new String(b, StandardCharsets.UTF_8)).getAsJsonArray()) {
+                        var r = el.getAsJsonObject(); String cat = r.get("category").getAsString();
+                        if (gone.contains(r.get("mixin").getAsString()) || gone.contains(r.get("mixin").getAsString() + "#" + r.get("handler").getAsString())) continue;
+                        String what = r.get("mixin").getAsString() + "#" + r.get("handler").getAsString() + " -> " + r.get("target").getAsString() + ": " + r.get("detail").getAsString();
+                        if (cat.equals("lambda_retarget")) { retargeted++; q.log.accept("[amber-ul] mixin lambda 重定向 (" + m.id + "): " + what); }
+                        else if (cat.equals("lambda_unresolved"))
+                            p.problems.add(new Resolver.Problem("mixin_lambda_unresolved", "error", m.id, m.jar.toString(), "minecraft", "", "",
+                                "模组 " + m.id + " 的 mixin 指向的游戏 lambda 在 NeoForge 上找不到唯一对应, 启动时会失败: " + what));
+                        else if (cat.equals("lambda_unverified")) q.log.accept("[amber-ul] mixin lambda 未能确认 (" + m.id + "), 保持原样: " + what);
+                        else if (r.get("fixed").getAsBoolean()) { retargeted++; q.log.accept("[amber-ul] mixin 烘焙时修正 " + cat + " (" + m.id + "): " + what); }
+                        else p.problems.add(new Resolver.Problem("mixin_target_changed", "warning", m.id, m.jar.toString(), "minecraft", "", "",
+                                "模组 " + m.id + " 的 mixin 注入点在 NeoForge 上变了, 烘焙时无法自动修正 (" + cat + "), 启动时可能失败: " + what));
+                    }
+                }
+            }
+        }
+        p.lambdaFingerprint = Hash.str(fp.toString()).substring(0, 12);
+        if (retargeted > 0) q.log.accept("[amber-ul] mixin 烘焙时修正 (lambda 重定向等): " + retargeted + " 个注入器 (烘焙时, " + p.lambdaFixes.size() + " 个 mixin 类)");
     }
 
     /** Remap class path for the Forge side: game libraries + Forge's runtime libraries. */

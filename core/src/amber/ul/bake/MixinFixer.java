@@ -104,6 +104,199 @@ public final class MixinFixer {
         }
     }
 
+    /** Version of the bake-time lambda pass (part of its per-mod cache key). */
+    public static final String LAMBDA_PASS = "lambda-pass-2";
+
+    /**
+     * Bake-time pass over every mixin, no census needed: an injector whose method selector names a synthetic lambda of a
+     * game class ({@code lambda$<outer>$<n>}; javac numbers them per class, so NeoForge's patches shift the numbers) is
+     * checked against the patched class. The patched lambda that is the clean one is found by outer method, descriptor and
+     * body ({@link #sameLambda}, then {@link #sameLambdaByShape}), never by its number. Results:
+     * <ul>
+     * <li>{@code lambda_retarget} (fixed): the selector now names the matching patched lambda;</li>
+     * <li>{@code lambda_unresolved}: the clean lambda's name is gone from the patched class and no unique match exists (or
+     *     the match lacks the injector's @At point), so Mixin would fail at runtime; the bake reports it instead;</li>
+     * <li>{@code lambda_unverified}: the name still exists but its body does not match clearly; left as it is.</li>
+     * </ul>
+     */
+    public void scanLambdas() {
+        for (String mi : new ArrayList<>(mixins.keySet())) {
+            byte[] mb = fixedClasses.containsKey(mi) ? fixedClasses.get(mi) : mixins.get(mi);
+            String txt = new String(mb, StandardCharsets.ISO_8859_1);
+            if (!txt.contains("Lorg/spongepowered/asm/mixin/Mixin;")) continue;
+            JsonObject rm = refmaps.get(mi);
+            if (!txt.contains("lambda$") && (rm == null || !rm.toString().contains("lambda$"))) continue;
+            ClassNode mixin = node(mb);
+            List<String> targets = mixinTargets(mixin);
+            String mixinName = mixin.name.replace('/', '.');
+            boolean changed = false;
+            for (MethodNode h : mixin.methods) {
+                AnnotationNode inj = injector(h);
+                if (inj == null) continue;
+                List<String> sels = strings(value(inj, "method")), out = new ArrayList<>(sels);
+                boolean hc = false;
+                for (int i = 0; i < sels.size(); i++) {
+                    String res = resolve(mixin.name, sels.get(i)), sel = selector(res);
+                    if (!sel.startsWith("lambda$")) continue;
+                    int semi = res.indexOf(';'), par = res.indexOf('(');
+                    List<String> owners = res.startsWith("L") && semi > 0 && (par < 0 || semi < par) ? List.of(res.substring(1, semi)) : targets;
+                    for (String t : owners) {
+                        byte[] cb = clean.get(t), pb = patched.get(t);
+                        if (cb == null || pb == null) continue;
+                        ClassNode cleanC = node(cb), patchedC = node(pb);
+                        MethodNode cm = find(cleanC, sel);
+                        if (cm == null || !cm.name.startsWith("lambda$")) continue;
+                        MethodNode pm = find(patchedC, cm.name + cm.desc), best = sameLambda(cm, patchedC);
+                        if (best == null) best = sameLambdaByShape(cm, patchedC);
+                        String tn = t.replace('/', '.');
+                        if (best != null && best == pm) continue;   // same number, same body: nothing to do
+                        String missing = best == null ? null : missingPoint(mixin, inj, best);
+                        if (best != null && missing == null) {
+                            out.set(i, best.name + best.desc); hc = true;
+                            results.add(new Result(mixinName, tn, h.name, "lambda_retarget", true, cm.name + cm.desc + " -> " + best.name));
+                        } else if (pm == null || missing != null) {
+                            results.add(new Result(mixinName, tn, h.name, "lambda_unresolved", false, cm.name + cm.desc
+                                + (best == null ? ": no unique same-shape lambda in the patched class (" + lambdaCandidates(cm, patchedC) + " candidates)" : ": match " + best.name + " lacks @At " + missing)));
+                        } else results.add(new Result(mixinName, tn, h.name, "lambda_unverified", false, cm.name + cm.desc + ": present, body differs"));
+                    }
+                }
+                if (hc) { setValue(inj, "method", out); changed = true; }
+            }
+            if (changed) { ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS); mixin.accept(cw); fixedClasses.put(mi, cw.toByteArray()); }
+        }
+    }
+
+    /**
+     * Bake-time pass, second half: injectors that cannot apply to the patched game as written, found statically (the
+     * census finds them by running Mixin): the selected clean method is gone from the patched class, or an @At(INVOKE/FIELD)
+     * point it has in the clean game is gone from the patched method. Each goes through {@link #handle}, the census
+     * fixer's analysis. Lambda selectors are left to {@link #scanLambdas}.
+     */
+    public void scanFailing() {
+        for (String mi : new ArrayList<>(mixins.keySet())) {
+            byte[] mb = fixedClasses.containsKey(mi) ? fixedClasses.get(mi) : mixins.get(mi);
+            if (!new String(mb, StandardCharsets.ISO_8859_1).contains("Lorg/spongepowered/asm/mixin/Mixin;")) continue;
+            ClassNode mixin = node(mb);
+            for (String t : mixinTargets(mixin)) {
+                byte[] cb = clean.get(t), pb = patched.get(t);
+                if (cb == null || pb == null || Arrays.equals(cb, pb)) continue;
+                ClassNode cleanC = node(cb), patchedC = node(pb);
+                for (MethodNode h : mixin.methods) if (injector(h) != null && staticallyFails(mixin, h, cleanC, patchedC))
+                    handle(mixin.name.replace('/', '.'), t.replace('/', '.'), h.name);
+            }
+        }
+    }
+    boolean staticallyFails(ClassNode mixin, MethodNode h, ClassNode cleanC, ClassNode patchedC) {
+        AnnotationNode inj = injector(h);
+        List<String> sels = strings(value(inj, "method"));
+        if (sels.size() != 1) return false;
+        String sel = selector(resolve(mixin.name, sels.get(0)));
+        if (sel.startsWith("lambda$")) return false;
+        MethodNode cm = find(cleanC, sel);
+        if (cm == null) return false;   // not a method of the clean game class (a mod or bridge target): nothing to compare
+        MethodNode pm = find(patchedC, cm.name + cm.desc);
+        if (pm == null) return true;
+        for (AnnotationNode at : annos(value(inj, "at"))) {
+            String v = (String) value(at, "value"), tg = (String) value(at, "target");
+            if (tg == null || !("INVOKE".equals(v) || "FIELD".equals(v))) continue;
+            String r = resolve(mixin.name, tg);
+            if (count(cm, r) > 0 && count(pm, r) == 0) return true;
+        }
+        return false;
+    }
+
+    /** An @At(INVOKE/FIELD) target of the injector that m does not contain, or null. */
+    String missingPoint(ClassNode mixin, AnnotationNode inj, MethodNode m) {
+        for (AnnotationNode at : annos(value(inj, "at"))) {
+            String v = (String) value(at, "value"), tg = (String) value(at, "target");
+            if (tg == null || !("INVOKE".equals(v) || "FIELD".equals(v) || "INVOKE_ASSIGN".equals(v))) continue;
+            String r = resolve(mixin.name, tg);
+            if (count(m, r) == 0) return r;
+        }
+        return null;
+    }
+
+    static List<MethodNode> lambdaPeers(MethodNode cm, ClassNode patchedC) {
+        String outer = cm.name.substring(0, cm.name.lastIndexOf('$') + 1);
+        List<MethodNode> l = new ArrayList<>();
+        for (MethodNode m : patchedC.methods)
+            if (m.name.startsWith(outer) && m.desc.equals(cm.desc) && (m.access & Opcodes.ACC_STATIC) == (cm.access & Opcodes.ACC_STATIC)) l.add(m);
+        return l;
+    }
+    static int lambdaCandidates(MethodNode cm, ClassNode patchedC) { return lambdaPeers(cm, patchedC).size(); }
+
+    /**
+     * Fallback when {@link #sameLambda}'s reference sets do not decide (tiny bodies, or NeoForge added a call): references
+     * (Jaccard, weight 0.6) plus instruction shape (opcode-sequence edit similarity, weight 0.4). Unique: score >= 0.7 and
+     * 0.15 ahead of the next candidate.
+     */
+    static MethodNode sameLambdaByShape(MethodNode cm, ClassNode patchedC) {
+        Set<String> want = refs(cm); int[] wo = opcodes(cm);
+        MethodNode best = null; double bs = -1, second = -1;
+        for (MethodNode m : lambdaPeers(cm, patchedC)) {
+            Set<String> got = refs(m), inter = new HashSet<>(want); inter.retainAll(got);
+            Set<String> uni = new HashSet<>(want); uni.addAll(got);
+            double s = 0.6 * (uni.isEmpty() ? 1 : (double) inter.size() / uni.size()) + 0.4 * shape(wo, opcodes(m));
+            if (s > bs) { second = bs; bs = s; best = m; } else if (s > second) second = s;
+        }
+        return best != null && bs >= 0.7 && bs - second >= 0.15 ? best : null;
+    }
+    static int[] opcodes(MethodNode m) {
+        int[] r = new int[Math.min(m.instructions.size(), 400)]; int n = 0;
+        for (AbstractInsnNode i : m.instructions) { if (n == r.length) break; if (i.getOpcode() >= 0) r[n++] = i.getOpcode(); }
+        return Arrays.copyOf(r, n);
+    }
+    /** 1 - edit distance / longer length. */
+    static double shape(int[] a, int[] b) {
+        if (a.length == 0 && b.length == 0) return 1;
+        int[] prev = new int[b.length + 1], cur = new int[b.length + 1];
+        for (int j = 0; j <= b.length; j++) prev[j] = j;
+        for (int i = 1; i <= a.length; i++) {
+            cur[0] = i;
+            for (int j = 1; j <= b.length; j++) cur[j] = Math.min(Math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            int[] t = prev; prev = cur; cur = t;
+        }
+        return 1 - (double) prev[b.length] / Math.max(a.length, b.length);
+    }
+
+    /**
+     * The lambda pass for one baked mod jar against the clean and patched game jars; classes are read from the game jars only
+     * when a mixin names a lambda. Writes {@code out}: the fixed mixin classes plus amber-lambda.json (the results).
+     */
+    public static List<Result> lambdaPass(Path cleanJar, Path patchedJar, Path modJar, Path out) throws IOException {
+        Map<String, byte[]> mixins = new HashMap<>(); Map<String, JsonObject> refmaps = new HashMap<>();
+        loadMod(modJar, mixins, refmaps);
+        MixinFixer f;
+        try (JarFile c = new JarFile(cleanJar.toFile(), false); JarFile p = new JarFile(patchedJar.toFile(), false)) {
+            f = new MixinFixer(lazyClasses(c), lazyClasses(p), mixins, refmaps);
+            f.scanLambdas();
+            f.scanFailing();
+        }
+        Files.createDirectories(out.toAbsolutePath().getParent());
+        Path tmp = out.resolveSibling(out.getFileName() + "." + ProcessHandle.current().pid() + "." + System.nanoTime() + ".tmp");
+        try (JarOutputStream o = new JarOutputStream(Files.newOutputStream(tmp))) {
+            for (var e : f.fixedClasses.entrySet()) { o.putNextEntry(SafeFiles.entry(e.getKey() + ".class")); o.write(e.getValue()); o.closeEntry(); }
+            o.putNextEntry(SafeFiles.entry("amber-lambda.json"));
+            o.write(new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(f.results).getBytes(StandardCharsets.UTF_8)); o.closeEntry();
+        }
+        Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        return f.results;
+    }
+    /** Class bytes by internal name, read from the jar on demand (get only). */
+    static Map<String, byte[]> lazyClasses(JarFile jf) {
+        Map<String, byte[]> cache = new HashMap<>();
+        return new AbstractMap<>() {
+            @Override public byte[] get(Object k) {
+                return cache.computeIfAbsent((String) k, n -> {
+                    JarEntry e = jf.getJarEntry(n + ".class");
+                    if (e == null) return null;
+                    try (InputStream in = jf.getInputStream(e)) { return in.readAllBytes(); } catch (IOException x) { throw new UncheckedIOException(x); }
+                });
+            }
+            @Override public Set<Map.Entry<String, byte[]>> entrySet() { throw new UnsupportedOperationException("lazy class map"); }
+        };
+    }
+
     List<String> mixinTargets(ClassNode mixin) {
         List<String> r = new ArrayList<>();
         for (List<AnnotationNode> l : Arrays.asList(mixin.visibleAnnotations, mixin.invisibleAnnotations)) if (l != null) for (AnnotationNode a : l) {
