@@ -9,7 +9,8 @@ Layout:
   bridges/*.jar     fmlbridge (NeoForge), fabricbridge (Fabric API on NeoForge), fmlbridge-forge + fabricbridge-forge
                     (Forge 1.20.1), forgecompat (Forge 1.21.1 mods on NeoForge)
   manifest.json     versions, java, entry points, class path, sha256/sha1/size of every file
-  LICENSE, THIRD_PARTY_NOTICES.md, licenses/   the project's licence, notices, and every bundled library's licence text
+  LICENSE, COMMERCIAL-EXCEPTION.md, THIRD_PARTY_NOTICES.md, licenses/   the project's licence and exception, notices,
+                    and every bundled library's licence text
 The manifest's version fields come from running `amber.ul.Bake version` from the packaged files themselves.
 Licences: the package holds Amber's own code and the unmodified official library jars; it holds no Mojang, NeoForge or
 Forge files. The bridge jars are Amber's code compiled against those platforms.
@@ -51,6 +52,7 @@ def main():
     if not bridges: os.rmdir(f'{stage}/bridges')
     # licences: the project's, the notices, the fetched library texts, and the MIT texts Mixin/MixinExtras carry in their jars
     shutil.copyfile(f'{R}/LICENSE', f'{stage}/LICENSE'); shutil.copyfile(f'{R}/THIRD_PARTY_NOTICES.md', f'{stage}/THIRD_PARTY_NOTICES.md')
+    shutil.copyfile(f'{R}/COMMERCIAL-EXCEPTION.md', f'{stage}/COMMERCIAL-EXCEPTION.md')
     os.makedirs(f'{stage}/licenses')
     for f in sorted(os.listdir(f'{R}/licenses')):
         if f.endswith('.txt'): shutil.copyfile(f'{R}/licenses/{f}', f'{stage}/licenses/{f}')

@@ -1,6 +1,6 @@
 # Third-party notices
 
-Jay Loader's own code is under the MIT License (`LICENSE`), except for the files listed in section 1, which are under the Apache License 2.0.
+Jay Loader's own code is under the PolyForm Noncommercial License 1.0.0 (`LICENSE`), with the Jay Loader Commercial Use Exception (`COMMERCIAL-EXCEPTION.md`), except for the files listed in section 1, which are under the Apache License 2.0. Versions released before this change were under the MIT License.
 
 ## 1. Code in this repository derived from, or compatible with, other projects
 

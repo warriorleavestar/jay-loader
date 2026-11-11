@@ -19,4 +19,6 @@ The bridge jars compile against the Minecraft, NeoForge and Forge jars. Those ar
 
 ## Licence
 
-MIT (`LICENSE`), except the Fabric API-derived files and the Fabric/Quilt API declarations, which are under Apache-2.0. See `THIRD_PARTY_NOTICES.md`. Minecraft is not included.
+PolyForm Noncommercial 1.0.0 (`LICENSE`), with a Commercial Use Exception for individuals and small teams (`COMMERCIAL-EXCEPTION.md`), except the Fabric API-derived files and the Fabric/Quilt API declarations, which are under Apache-2.0. See `THIRD_PARTY_NOTICES.md`. Versions released before this change stay under the MIT License.
+
+Any place that still calls Jay Loader "open source" or "MIT", including older docs and release notes, is outdated: `LICENSE` and `COMMERCIAL-EXCEPTION.md` take precedence. If you find such a description, please open an issue. Minecraft is not included.

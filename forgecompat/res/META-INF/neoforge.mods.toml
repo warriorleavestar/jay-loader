@@ -1,6 +1,6 @@
 modLoader="javafml"
 loaderVersion="[1,)"
-license="MIT"
+license="PolyForm-Noncommercial-1.0.0 with the Jay Loader Commercial Use Exception"
 [[mods]]
 modId="amber_forgecompat"
 version="0.1.0"
