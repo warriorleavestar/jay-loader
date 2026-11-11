@@ -84,7 +84,7 @@ public final class Launcher {
         Path isoFile = cache.toAbsolutePath().getParent().resolve("mixin-isolation").resolve(isoKey + ".json");
         Path fixJar = isoFile.resolveSibling(isoKey + ".fixes.jar");
         if (a.containsKey("census") && Boolean.getBoolean("amber.ul.censusFresh")) { Files.deleteIfExists(isoFile); Files.deleteIfExists(fixJar); }   // census round 1 starts clean
-        String fixFp = (Files.exists(isoFile) ? Hash.file(isoFile) : "-") + "|" + (Files.exists(fixJar) ? Hash.file(fixJar) : "-") + "|compat=" + compatFingerprint(mc) + "|bridge=" + BridgeManifest.fingerprint(q.neoforge != null ? "neoforge" : q.forge != null ? "forge" : null, mc);
+        String fixFp = (Files.exists(isoFile) ? Hash.file(isoFile) : "-") + "|" + (Files.exists(fixJar) ? Hash.file(fixJar) : "-") + "|lambda=" + prep.lambdaFingerprint + "|compat=" + compatFingerprint(mc) + "|bridge=" + BridgeManifest.fingerprint(q.neoforge != null ? "neoforge" : q.forge != null ? "forge" : null, mc);
         if (mixin) tx.add(MixinRuntime.transformer(RuntimeVersions.fingerprint() + "|side=" + (q.server ? "SERVER" : "CLIENT") + "|loader=" + loaderBuild() + "|fixes=" + fixFp));
         if (prep.forge != null) tx.add(new amber.ul.fml.LaunchPluginHost("forge-" + prep.forge.forge + "|side=" + (q.server ? "SERVER" : "CLIENT")));   // M4: modlauncher launch plugins
         String cacheMode = a.getOrDefault("classcache", "safe");
@@ -104,6 +104,8 @@ public final class Launcher {
             for (var e : Collections.list(jf.entries())) if (e.getName().endsWith(".class")) cl.overrides.put(e.getName(), amber.ul.bake.SafeFiles.boundedRead(jf.getInputStream(e), amber.ul.bake.SafeFiles.ENTRY_MAX, e.getName()));
             System.out.printf("[amber-ul] 烘焙时 mixin 修正: %d 个 mixin 类 (%s)%n", cl.overrides.size(), fixJar.getFileName());
         }
+        // bake-time lambda retargets; a census fix of the same mixin class (made from the original bytes) already includes its own
+        for (var e : prep.lambdaFixes.entrySet()) cl.overrides.putIfAbsent(e.getKey(), e.getValue());
         if (prep.neoforge != null) applyInjectorDrops(mc, baked, cl);   // compat rules: injectors superseded by a NeoForge system
         if (prep.neoforge != null || prep.forge != null) applyBridgeManifest(prep.neoforge != null ? "neoforge" : "forge", mc, baked, cl);   // phase 5: Fabric API bridge vetoes / strips / skipped entrypoints
         for (ModInfo m : baked) amber.ul.mixin.AmberMixinErrorHandler.BAKED_JARS.add(m.jar.toAbsolutePath().toString());

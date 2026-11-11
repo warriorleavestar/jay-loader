@@ -83,3 +83,4 @@
 - [ ] 真机上手动：Fabric 1.21.1 和 NeoForge 1.21.1 实例里放 Compost Bin（Quilt 专属，1.21 构建）：堆肥箱方块能合成、放下、打开界面，开关有声音
 - [ ] 真机上手动：放 QSL（Quilted Fabric API）时 Jay 报 quilt_api_missing，说清是 QSL、为什么不能用，建议换 Fabric API；不崩
 
+- [ ] 真机上手动（2026-11-11 lambda 修复）：Jay 里 NeoForge 1.21.1 实例装 Visuality + Cloth Config + Fabric API 0.116.18：能进世界，不再报 lambda$tick$32；打开/关闭界面、按键、鼠标点击界面都正常（Fabric 界面事件），睡床正常（实体事件里的 lambda）
