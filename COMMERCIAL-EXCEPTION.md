@@ -57,8 +57,10 @@ every decision under this permission.
 
 ---
 
-Versions of Jay Loader released before this change
-were released under the MIT License, and those copies stay under it.
+LICENSE and this exception now cover every version of Jay Loader,
+including versions first released under the MIT License. The licensor no
+longer offers any version under MIT. Anyone who already received a copy
+of an earlier version under MIT keeps the MIT rights to that copy.
 Any description of Jay Loader as "open source" or "MIT" elsewhere, including in
 older docs and release notes, is outdated; this file and LICENSE take
 precedence. Please open an issue if you find one.
