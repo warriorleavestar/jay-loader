@@ -84,3 +84,4 @@
 - [ ] 真机上手动：放 QSL（Quilted Fabric API）时 Jay 报 quilt_api_missing，说清是 QSL、为什么不能用，建议换 Fabric API；不崩
 
 - [ ] 真机上手动（2026-11-11 lambda 修复）：Jay 里 NeoForge 1.21.1 实例装 Visuality + Cloth Config + Fabric API 0.116.18：能进世界，不再报 lambda$tick$32；打开/关闭界面、按键、鼠标点击界面都正常（Fabric 界面事件），睡床正常（实体事件里的 lambda）
+- [ ] 真机上手动（2026-11-11 forgecompat-2）：Jay 里 NeoForge 1.21.1 实例装 Wildlife Expanded: Skunk（Forge 1.21.1 版）：能进世界；臭鼬能生成、能骑到肩上（能力 skunk:shouldermobs），退出重进后肩上的还在；局域网/服务器上另一个玩家能看到肩上的臭鼬（SimpleChannel 同步）；日志里 8 条 armor_material 覆盖警告属正常
