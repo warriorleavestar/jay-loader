@@ -15,6 +15,10 @@ R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.a
 MC = f'{R}/mc'; T = f'{MC}/bakecli'; JAVA = f'{R}/tools/jre21/bin/java.exe'
 fails = []
 PKG = None
+# v1.3.1: what a full build (all five bridges) accepts, per (kind, mc)
+FULL_ACCEPTS = {('vanilla', '1.21.1'): (True, ['fabric', 'quilt']), ('neoforge', '1.21.1'): (True, ['neoforge', 'fabric', 'quilt', 'forge']),
+                ('forge', '1.20.1'): (True, ['forge', 'neoforge', 'fabric', 'quilt'])}
+def accepts_of(a): return {(p['platform'], p['mc']): (p['available'], p['accepts']) for p in (a or [])}
 if '--package' in sys.argv:
     out = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'package.py')], capture_output=True, text=True)
     if out.returncode: sys.exit('package.py failed: ' + out.stderr[-800:])
@@ -28,6 +32,8 @@ if '--package' in sys.argv:
     if bad or on_disk != sorted(MAN['files']): fails.append('package manifest')
     ok = all(os.path.exists(f'{PKG}/bridges/{b}') for b in ('fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar')) and MAN['javaMin'] == {'vanilla': 21, 'neoforge': 21, 'forge': 21}
     print(('OK   ' if ok else 'FAIL ') + 'package: all bridge jars under bridges/, javaMin 21 per platform', flush=True)
+    ok = MAN.get('interfaceRevision') == '1.3.1' and accepts_of(MAN.get('accepts')) == FULL_ACCEPTS
+    print(('OK   ' if ok else 'FAIL ') + 'package manifest (v1.3.1): accepts per platform from the packaged bridges ' + str(MAN.get('accepts')), flush=True)
     if not ok: fails.append('package layout')
 else:
     LCP = ';'.join([f'{R}/build/loader'] + open(f'{R}/build/loader-cp.txt').read().strip().split(';'))
@@ -197,6 +203,9 @@ def vanilla():
     v = [x for x in out if x['type'] == 'result']
     check('version: interface 1.3, platforms, mappingCache, javaMin 21 per platform', code == 0 and v and v[0].get('interface') == '1.3' and v[0]['platforms'].get('forge') == ['1.20.1'] and 'mappingCache' in v[0]
           and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21}, str(v))
+    check('version (v1.3.1): interfaceRevision 1.3.1, accepts per platform matches the bridges present (full build)',
+          code == 0 and v and v[0].get('interfaceRevision') == '1.3.1' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
+          and all(p['missingBridges'] == [] for p in v[0]['accepts']), str(v and v[0].get('accepts')))
     libv = v[0].get('libs', {}) if v else {}
     want = {n.rsplit('-', 1)[0]: n.rsplit('-', 1)[1][:-4] for n in CP_NAMES if not n.startswith('intermediary')}
     check('version.libs: the versions on the real class path (asm, sponge-mixin, mixinextras ...)', all(libv.get(a) == ver_ for a, ver_ in want.items()) and libv.get('asm') == '9.10.1',

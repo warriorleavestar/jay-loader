@@ -1,8 +1,16 @@
-# Interface between the universal loader and Amber's bake framework (v1.3)
+# Interface between the universal loader and Amber's bake framework (v1.3.1)
 
-v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; **v1.3 2026-11-10**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
+v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; **v1.3.1 2026-11-11**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
 
 ## Changelog
+
+**v1.3.1 (2026-11-11).** Additive. `interface` stays `"1.3"`, so consumers that check it keep working. `protocol` stays 1. New:
+- `version` reports `"interfaceRevision":"1.3.1"`.
+- `version` and the package `manifest.json` carry `accepts`: one entry per platform and game version, `{platform, mc, available, accepts, missingBridges}`.
+  - `accepts` lists the mod ecosystems that platform loads in this build. The names are Modrinth loader names (`fabric`, `quilt`, `forge`, `neoforge`), with the platform's own ecosystem first.
+  - It is derived from the bridge jars actually present. Forge/NeoForge need their FML bridge to run at all; without it, `available` is `false` and `accepts` is `[]`. Fabric/Quilt mods there need the Fabric API bridge, and Forge 1.21.1 mods on NeoForge need `forgecompat`.
+  - A core-only package (no bridges) therefore accepts only `fabric`/`quilt` on the vanilla platform.
+- The existing `platforms` map is unchanged.
 
 **v1.3 (2026-11-10).** Additive, `protocol` stays 1 (cache layout unchanged; old caches and states stay valid). Answers the loader-side requests from the Jay integration (Jay PR #139).
 - **Loader libraries come from the build.** `requirements` no longer carries a hand-written `loader-lib` list (it said asm 9.7.1 / mixin 0.15.4; the loader runs with asm 9.10.1 / mixin 0.17.5). The build generates `amber-ul/loader-libs.json` from the real class path (`tools/loader_libs.py`), and `requirements` lists exactly those jars, each with `group`, `artifact`, `version`, `url` (Maven Central or maven.fabricmc.net), `sha1`, `sha256`, `size`, `path` (`libs/<file>`). `version.libs` comes from the same list (keyed by Maven artifact: `asm`, `sponge-mixin`, `mixinextras-fabric`, …).
@@ -77,8 +85,13 @@ v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; **v1.3 2026-11-10**. Wr
    "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
    "libs":{"asm":"9.10.1","sponge-mixin":"0.17.5+mixin.0.8.7","mixinextras-fabric":"0.5.5","tiny-remapper":"0.10.4",…},
-   "javaMin":{"vanilla":21,"neoforge":21,"forge":21},"javaRuntime":21}
+   "javaMin":{"vanilla":21,"neoforge":21,"forge":21},"javaRuntime":21,
+   "interfaceRevision":"1.3.1",
+   "accepts":[{"platform":"vanilla","mc":"1.21.1","available":true,"accepts":["fabric","quilt"],"missingBridges":[]},
+              {"platform":"neoforge","mc":"1.21.1","available":true,"accepts":["neoforge","fabric","quilt","forge"],"missingBridges":[]},
+              {"platform":"forge","mc":"1.20.1","available":true,"accepts":["forge","neoforge","fabric","quilt"],"missingBridges":[]}]}
   ```
+  `accepts` (v1.3.1) is what this build loads per platform, from the bridges present: use it to decide which mods to offer for an instance.
   When `protocol` changes, Amber should treat old caches as invalid. `interface` changes on additive revisions only.
 - Every request and response carries `"schema":"amber-ul/<name>@1"` (for example `amber-ul/bake-mod-request@1`). An unknown schema name is an error. v1.1 keeps the `@1` schemas: its fields are optional additions.
 - Errors with their own code: `bad_request`, `unknown_stage`, `stale_state`, `java_too_old` (v1.3), `internal`.
@@ -176,7 +189,7 @@ amber-ul-0.3.0/
   manifest.json
 ```
 
-`manifest.json` (`schema: amber-ul/package@1`): `loaderVersion`, `pipelineVersion`, `protocol`, `interface`, `platforms`, `javaMin` (per platform), `entry: {bake: "amber.ul.Bake", launch: "amber.ul.Launcher"}`, `classpath` (relative paths, in order: `loader.jar` then `libs/…`), `bridges` (name → path), `libs` (`group`, `artifact`, `version`, `url`, `sha1`, `sha256`, `size`, `path`), `files` (every file except the manifest → `sha256`, `sha1`, `size`). The version fields are read from the packaged loader itself (`Bake version` run from the package).
+`manifest.json` (`schema: amber-ul/package@1`): `loaderVersion`, `pipelineVersion`, `protocol`, `interface`, `interfaceRevision` (v1.3.1), `platforms`, `accepts` (v1.3.1, as in `version`), `javaMin` (per platform), `entry: {bake: "amber.ul.Bake", launch: "amber.ul.Launcher"}`, `classpath` (relative paths, in order: `loader.jar` then `libs/…`), `bridges` (name → path), `libs` (`group`, `artifact`, `version`, `url`, `sha1`, `sha256`, `size`, `path`), `files` (every file except the manifest → `sha256`, `sha1`, `size`). The version fields are read from the packaged loader itself (`Bake version` run from the package).
 
 For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` resolved against the folder, and pass the launch block on unchanged (its class path already points into the folder). The package contains no Mojang, NeoForge or Forge files; it may be shipped or downloaded as is. The folder must not be moved while an instance's launch block points into it (re-run `bake-instance` after moving).
 

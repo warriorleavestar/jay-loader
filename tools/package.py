@@ -73,6 +73,7 @@ def main():
         'schema': 'amber-ul/package@1',
         'loaderVersion': ver['loaderVersion'], 'pipelineVersion': ver['pipelineVersion'], 'protocol': ver['protocol'], 'interface': ver['interface'],
         'platforms': ver['platforms'], 'javaMin': ver['javaMin'],
+        'interfaceRevision': ver['interfaceRevision'], 'accepts': ver['accepts'],   # v1.3.1: from the packaged bridges themselves
         'entry': {'bake': 'amber.ul.Bake', 'launch': 'amber.ul.Launcher'},
         'classpath': classpath,
         'bridges': {b: f'bridges/{b}' for b in bridges},
