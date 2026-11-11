@@ -46,7 +46,7 @@ public final class ModuleServices {
         if (add.isEmpty()) return null;
         Path out = amber.ul.bake.CacheUse.mark(dir.resolve("module-services-" + amber.ul.bake.Hash.str(key.toString()).substring(0, 16) + ".jar"));
         if (Files.exists(out)) return out;
-        Files.createDirectories(dir);
+        Files.createDirectories(out.getParent());
         Path tmp = out.resolveSibling(out.getFileName() + "." + ProcessHandle.current().pid() + ".tmp");
         try (JarOutputStream jo = new JarOutputStream(Files.newOutputStream(tmp))) {
             for (var e : add.entrySet()) {

@@ -12,6 +12,25 @@ Now `bake-instance`, `warm` and every launch run a static pass for each baked Fa
 
 Test switch: `-Damber.ul.noLambdaRetarget=true`.
 
+## Sandboxed launch (unreleased, after 0.3.1)
+
+Jay plans to run the game in a sandbox that can write only the instance directory. A launch from a state file (`amber.ul.Launcher --state …`) now writes only under `<instanceDir>/.amber-ul/` (plus the game's own `gameDir`):
+
+| What | Before | Now |
+| --- | --- | --- |
+| Class cache | `<cacheRoot>/classcache/` | `<instanceDir>/.amber-ul/classcache/` |
+| Mixin isolation files | `<cacheRoot>/../mixin-isolation/` (outside the cache root) | `<instanceDir>/.amber-ul/mixin-isolation/`; an older file next to the cache root is still read |
+| `changed-classes*.txt` (debug lists) | `<cacheRoot>/` | `<instanceDir>/.amber-ul/` |
+| A cache product missing at launch (mod set changed after `warm`, cache cleaned, corrupt graph) | built into `cacheRoot` / `mappingCache` | built into `<instanceDir>/.amber-ul/cache-overlay/{cache,mappings}/`, same relative path |
+
+- The shared caches (`cacheRoot`, `mappingCache`), the platform install, the game jar and libraries, the mappings and the loader package are only read. They can be read-only for the game process.
+- Files in the overlay are used until the shared cache has them again. `warm` builds the shared copy as before (a launch that needed the overlay still reports `launch_rebaked`). Jay may delete `cache-overlay/` at any time.
+- `bake-instance`, `warm` and `gc` are unchanged. They write `cacheRoot` and `mappingCache` and must run outside the sandbox (or with those directories writable).
+- The loader itself opens no network connection and does not use `user.home`, `java.io.tmpdir`, `%APPDATA%` or `%LOCALAPPDATA%`. Every temp file sits next to its output.
+- On Jay's side: point `-Dorg.lwjgl.system.SharedLibraryExtractPath` and `-Djna.tmpdir` into the instance (LWJGL and JNA extract native libraries to `java.io.tmpdir` otherwise), and use the instance as `--gameDir` (logs, config, saves, crash reports).
+- Dev and census runs without `--state` keep the old layout. `-Damber.ul.launchOverlay=false` turns the overlay off for a state launch.
+- Test: `python -I tools/bake_cli_test.py sandbox`. It bakes and warms into a fresh shared cache, removes one baked mod, then launches with `user.home` and `java.io.tmpdir` pointing under a regular file. The launch must reach the title screen and leave the shared caches byte-for-byte unchanged. The rebuilt jar must be in the overlay and the class cache in the instance.
+
 ## Changelog
 
 **v1.3.1 (2026-11-11).** Additive. `interface` stays `"1.3"`, so consumers that check it keep working. `protocol` stays 1. New:

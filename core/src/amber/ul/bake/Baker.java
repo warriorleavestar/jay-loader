@@ -44,7 +44,7 @@ public final class Baker {
     }
     /** warm (interface v1.2): build or map in the mod remapper's graph now, even when every mod bake is a cache hit. */
     public void warmGraph(Mappings m) throws IOException { if (useAmber() && !m.isIdentity()) graph(m); }
-    public Baker(Path cacheDir) throws IOException { this.cacheDir = Files.createDirectories(cacheDir); }
+    public Baker(Path cacheDir) throws IOException { this.cacheDir = CacheUse.ensureDir(cacheDir); }
 
     /** Stage 0. */
     public Path remapGame(Path official, List<Path> classpath, Mappings m) throws IOException {
@@ -134,7 +134,7 @@ public final class Baker {
         if (todo.isEmpty()) return out;
         misses += todo.size();
         long t = System.nanoTime();
-        Path dir = Files.createDirectories(cacheDir.resolve("mods"));
+        Path dir = Files.createDirectories(CacheUse.writeTarget(cacheDir.resolve("mods")));   // temp files next to where the outputs go
         // HARD (@Shadow/@Accessor/@Invoker/@Overwrite member names) always. SOFT (@Inject/@At strings) only for mods WITHOUT a
         // refmap (e.g. Lithium: Loom already wrote intermediary strings into the annotations). With a refmap the strings are
         // dev names (Yarn) that only the refmap translates; SOFT would rewrite "Owner.name(desc)" into "LOwner;name(desc)"

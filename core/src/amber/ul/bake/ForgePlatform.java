@@ -97,7 +97,7 @@ public final class ForgePlatform {
     public Path bakeGame(Path cacheRoot, List<Path> libs) throws Exception {
         Path out = cacheRoot.resolve("game-forge").resolve("forge-" + mc + "-" + forge + "-" + baseKey() + ".jar");
         srgTable = out.resolveSibling(out.getFileName() + ".srg.txt");
-        CacheUse.mark(out); CacheUse.mark(srgTable);
+        Path[] at = CacheUse.mark(out, srgTable); out = at[0]; srgTable = at[1];
         if (Files.exists(out) && Files.exists(srgTable)) return out;
         long t = System.nanoTime();
         Files.createDirectories(out.getParent());

@@ -1,6 +1,6 @@
 """Bake interface v1.3 check (docs/amber-bake-interface.md): drives amber.ul.Bake the way Amber does and launches from
 the returned `launch` block only.
-  python -I tools/bake_cli_test.py [forge|vanilla|all] [--package]
+  python -I tools/bake_cli_test.py [forge|vanilla|sandbox|all] [--package]
 --package: runs tools/package.py and uses only the packaged folder (build/dist/amber-ul-<v>/: loader.jar, libs/, bridges/,
 manifest.json; its sha256s are checked first) instead of the dev build.
 Everything is written under mc/bakecli/ (test data, git-ignored); the Mojang/Forge inputs are read from mc/.
@@ -239,8 +239,57 @@ def vanilla():
     check('launch from the state file to the title screen', ok, str(seen[-3:]))
     problems_file('vanilla launch', res[0], seen)
 
+def tree(root):
+    out = {}
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            st = os.stat(os.path.join(d, f)); out[norm(os.path.join(d, f))] = (st.st_size, st.st_mtime_ns)
+    return out
+
+def sandbox():
+    """Sandbox: a launch from a state writes only inside its instance (Jay runs the game in a sandbox that can write only
+    there). Shared cacheRoot + mappingCache are baked and warmed, then one baked mod is taken out of the shared cache so the
+    launch has to rebake it. user.home and java.io.tmpdir point under a regular file (any write there fails); LWJGL/JNA
+    extract into the instance. The launch must reach the title screen, leave the shared caches byte-for-byte as they were,
+    put the rebaked jar in <instance>/.amber-ul/cache-overlay and the class cache in <instance>/.amber-ul/classcache."""
+    mcv = '1.21.1'; ver, ls = libs(mcv, f'{MC}/libraries')
+    base = f'{T}/sandbox'; shared = f'{base}/shared'; inst = f'{base}/inst'
+    if os.path.isdir(base): shutil.rmtree(base)   # this test's own data only
+    os.makedirs(inst)
+    open(f'{inst}/options.txt', 'w').write('onboardAccessibility:false' + chr(10))   # a fresh game dir shows the accessibility screen first
+    mods = sorted(f'{MC}/mods-world/{f}' for f in os.listdir(f'{MC}/mods-world') if f.endswith('.jar'))
+    req = {'schema': 'amber-ul/bake-instance-request@1', 'mcVersion': mcv, 'side': 'client', 'gameJar': f'{MC}/versions/{mcv}/{mcv}.jar',
+           'libraries': ls, 'mods': [{'path': m} for m in mods], 'javaMajor': 21, 'instanceDir': inst, 'gameDir': inst,
+           'cacheRoot': f'{shared}/cache', 'mappingsDir': f'{MC}/mappings', 'mappingCache': f'{shared}/mapcache'}
+    code, out, err = bake('bake-instance', req)
+    res = [x for x in out if x['type'] == 'result']
+    check('sandbox: bake-instance into a fresh shared cache', code == 0 and res, f'{code} {err[-400:]}')
+    if not res: return
+    sf = res[0]['launch']['stateFile']; warm('sandbox', sf)
+    baked = sorted(f for f in st_files(sf) if norm(f).startswith(norm(f'{shared}/cache/baked/mods/')) and f.endswith('.jar'))
+    check('sandbox: the state lists baked mod jars in the shared cache', bool(baked), str(st_files(sf)[:5]))
+    if not baked: return
+    os.remove(baked[0])   # cache files may go at any time; the launch has to rebake this one
+    before = tree(shared)
+    nowrite = f'{base}/not-a-dir'; open(nowrite, 'w').close()
+    jvm = [f'-Duser.home={nowrite}/home', f'-Djava.io.tmpdir={nowrite}/tmp',
+           f'-Dorg.lwjgl.system.SharedLibraryExtractPath={inst}/natives', f'-Djna.tmpdir={inst}/natives']
+    ok, seen = launch('sandbox-launch', res[0], ver, mcv, inst, 'TitleScreen.init', [], jvm)
+    check('sandbox: launch with HOME/TEMP unwritable reaches the title screen', ok, str(seen[-3:]))
+    after = tree(shared)
+    changed = sorted(set(before) ^ set(after)) + sorted(f for f in before if f in after and before[f] != after[f])
+    check('sandbox: the launch wrote nothing into the shared cacheRoot / mappingCache', not changed, str(changed[:5]))
+    ov = tree(f'{inst}/.amber-ul/cache-overlay/cache')
+    check('sandbox: the missing baked mod was rebuilt in the instance overlay', any(f.endswith(norm('/baked/mods/' + os.path.basename(baked[0]))) for f in ov), str(list(ov)[:5]))
+    check('sandbox: launch_rebaked reported', any('launch_rebaked' in s_ for s_ in seen), str(seen[-3:]))
+    check('sandbox: class cache folder inside the instance (it is saved after the title screen; the test kills the game there)', os.path.isdir(f'{inst}/.amber-ul/classcache'), '')
+    check('sandbox: nothing created in the unwritable user.home / tmpdir', os.path.isfile(nowrite) and os.path.getsize(nowrite) == 0, '')
+    code, out, err = bake('warm', {'schema': 'amber-ul/warm-request@1', 'stateFile': sf})
+    check('sandbox: warm afterwards rebuilds the jar in the shared cache', code == 0 and os.path.exists(baked[0]), f'{code} {err[-300:]}')
+
 what = next((a for a in sys.argv[1:] if not a.startswith('--')), 'all')
 if what in ('vanilla', 'all'): vanilla()
 if what in ('forge', 'all'): forge()
+if what in ('sandbox', 'all'): sandbox()
 print(f'RESULT bakecli {"PASS" if not fails else "FAIL"}: {len(fails)} failed {fails}')
 sys.exit(1 if fails else 0)

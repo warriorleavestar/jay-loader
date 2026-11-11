@@ -61,6 +61,15 @@ public final class Launcher {
             q.fabricBridge = LoaderHome.bridge("fabricbridge.jar");
         }
         Path cache = q.cacheRoot; String mc = q.mc;
+        // sandbox: a launch from a state writes only inside its instance (<instanceDir>/.amber-ul). The shared
+        // caches are read; anything missing there is built in the instance's overlay (warm builds it in the shared cache later).
+        Path runDir = a.containsKey("state") ? Path.of(a.get("state")).toAbsolutePath().normalize().getParent() : null;
+        if (runDir != null && !"false".equals(System.getProperty("amber.ul.launchOverlay"))) {
+            amber.ul.bake.CacheUse.overlay(cache, runDir.resolve("cache-overlay").resolve("cache"));
+            String mcache = System.getProperty("amber.ul.mappingCache");
+            if (mcache != null) amber.ul.bake.CacheUse.overlay(Path.of(mcache), runDir.resolve("cache-overlay").resolve("mappings"));
+        }
+        Path work = runDir != null ? runDir : cache;   // class cache, changed-class lists
         Instance.Prepared prep = Instance.prepare(q);
         for (var pr : prep.problems) {
             System.err.println("[amber-ul] 依赖问题 (" + pr.code() + ", " + pr.severity() + "): " + pr.message());
@@ -81,14 +90,16 @@ public final class Launcher {
         if (prep.forge != null) { tx.add(amber.ul.fml.Jpms.redirect()); tx.add(amber.ul.fml.Jpms.forgeLauncher()); }   // M4: FML 47 + modlauncher's Launcher answers
         // isolation + bake-time mixin fixes for exactly this platform + mod set (phase 4)
         String isoKey = isolationKey(prep, mc);
-        Path isoFile = cache.toAbsolutePath().getParent().resolve("mixin-isolation").resolve(isoKey + ".json");
+        Path legacyIso = cache.toAbsolutePath().getParent().resolve("mixin-isolation").resolve(isoKey + ".json");   // older loaders: next to the cache root
+        Path isoFile = runDir == null ? legacyIso : runDir.resolve("mixin-isolation").resolve(isoKey + ".json");
+        if (runDir != null && !a.containsKey("census") && !Files.exists(isoFile) && Files.exists(legacyIso)) isoFile = legacyIso;   // read only
         Path fixJar = isoFile.resolveSibling(isoKey + ".fixes.jar");
         if (a.containsKey("census") && Boolean.getBoolean("amber.ul.censusFresh")) { Files.deleteIfExists(isoFile); Files.deleteIfExists(fixJar); }   // census round 1 starts clean
         String fixFp = (Files.exists(isoFile) ? Hash.file(isoFile) : "-") + "|" + (Files.exists(fixJar) ? Hash.file(fixJar) : "-") + "|lambda=" + prep.lambdaFingerprint + "|compat=" + compatFingerprint(mc) + "|bridge=" + BridgeManifest.fingerprint(q.neoforge != null ? "neoforge" : q.forge != null ? "forge" : null, mc);
         if (mixin) tx.add(MixinRuntime.transformer(RuntimeVersions.fingerprint() + "|side=" + (q.server ? "SERVER" : "CLIENT") + "|loader=" + loaderBuild() + "|fixes=" + fixFp));
         if (prep.forge != null) tx.add(new amber.ul.fml.LaunchPluginHost("forge-" + prep.forge.forge + "|side=" + (q.server ? "SERVER" : "CLIENT")));   // M4: modlauncher launch plugins
         String cacheMode = a.getOrDefault("classcache", "safe");
-        UniversalClassLoader cl = new UniversalClassLoader(jars, tx, cache.resolve("classcache"), cacheMode, Launcher.class.getClassLoader());
+        UniversalClassLoader cl = new UniversalClassLoader(jars, tx, work.resolve("classcache"), cacheMode, Launcher.class.getClassLoader());
         boolean warm = cl.cacheWarm();
         cl.alsoInParent.addAll(libs);
         Thread.currentThread().setContextClassLoader(cl);
@@ -144,7 +155,7 @@ public final class Launcher {
         long[] tInit = new long[1], tPre = new long[1];
         Runnable saveCache = () -> { try { cl.saveCache(); } catch (Exception e) { e.printStackTrace(); } };
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try { Files.write(cache.resolve("changed-classes-exit.txt"), new ArrayList<>(cl.changed)); } catch (Exception e) { e.printStackTrace(); }
+            try { Files.write(work.resolve("changed-classes-exit.txt"), new ArrayList<>(cl.changed)); } catch (Exception e) { e.printStackTrace(); }
             System.out.printf("[amber-ul] 退出: 本次共被 Mixin 改动的类 %d%n", cl.changed.size());
             saveCache.run();
         }, "amber-ul-cache"));
@@ -173,7 +184,7 @@ public final class Launcher {
                         System.out.printf("[amber-ul] Mixin 审计: 强制加载其余全部目标类, 新增被改动类 %d, 用时 %.1f ms%n", cl.changed.size() - before, ms(System.nanoTime() - s));
                     }
                     System.out.printf("[amber-ul] 本次被 Mixin 改动的类: %d%n", cl.changed.size());
-                    try { Files.write(cache.resolve("changed-classes.txt"), new ArrayList<>(cl.changed)); } catch (Exception e) { e.printStackTrace(); }
+                    try { Files.write(work.resolve("changed-classes.txt"), new ArrayList<>(cl.changed)); } catch (Exception e) { e.printStackTrace(); }
                     new Thread(saveCache, "amber-ul-cache-save").start();
                 }
                 default -> {}
