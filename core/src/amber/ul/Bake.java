@@ -21,6 +21,8 @@ public final class Bake {
     /** Interface revision (docs/amber-bake-interface.md). 1.1 added optional fields, 1.2 the warm and gc stages, 1.3 javaMin,
      *  generated loader libraries, the packaged layout, the rebuilt/reused report and runtime problem files; protocol (cache layout) unchanged. */
     public static final String INTERFACE = "1.3";
+    /** Additive revision within INTERFACE (v1.3.1: `accepts`); consumers that check `interface` keep working. */
+    public static final String INTERFACE_REVISION = "1.3.1";
     /** Java major version the loader needs, per platform (v1.3). The loader is Java 21 bytecode on every platform; it is
      *  also what the baked launch needs, whatever the game version's own json asks for (Forge 1.20.1 asks for 17). */
     static final Map<String, Integer> JAVA_MIN = new LinkedHashMap<>();
@@ -63,7 +65,7 @@ public final class Bake {
     static int version() throws IOException {
         JsonObject r = result("version");
         r.addProperty("loaderVersion", LOADER_VERSION); r.addProperty("pipelineVersion", Baker.PIPELINE); r.addProperty("protocol", Integer.parseInt(PROTOCOL));
-        r.addProperty("interface", INTERFACE);
+        r.addProperty("interface", INTERFACE); r.addProperty("interfaceRevision", INTERFACE_REVISION);
         JsonArray mcs = new JsonArray(); PLATFORMS.values().stream().flatMap(List::stream).distinct().sorted().forEach(mcs::add); r.add("supportedMc", mcs);
         JsonObject pf = new JsonObject(); PLATFORMS.forEach((k, v) -> { JsonArray x = new JsonArray(); v.forEach(x::add); pf.add(k, x); }); r.add("platforms", pf);
         JsonObject mcache = new JsonObject(); mcache.addProperty("composer", amber.ul.map.MappingCache.COMPOSER); mcache.addProperty("keyFormat", "amber-tablekey/1"); r.add("mappingCache", mcache);
@@ -72,7 +74,50 @@ public final class Bake {
         r.add("libs", libs);
         JsonObject jm = new JsonObject(); JAVA_MIN.forEach(jm::addProperty); r.add("javaMin", jm);
         r.addProperty("javaRuntime", Runtime.version().feature());
+        r.add("accepts", accepts());
         emit(r); return 0;
+    }
+
+    /**
+     * v1.3.1: per platform and game version, which mod ecosystems (Modrinth loader names, the platform's own first) this build loads, derived from the bridge jars that are
+     * actually present (a core-only package has none). A Forge/NeoForge platform needs its FML bridge at all
+     * (available=false and accepts=[] without it); Fabric/Quilt mods there need the Fabric API bridge; Forge 1.21.1 mods on
+     * NeoForge need forgecompat. NeoForge 1.20.1 mods on Forge 1.20.1 and Quilt on the Fabric base are built into the loader.
+     */
+    static JsonArray accepts() {
+        JsonArray out = new JsonArray();
+        for (var e : PLATFORMS.entrySet()) for (String mc : e.getValue()) {
+            String kind = e.getKey();
+            List<String> acc = new ArrayList<>(), missing = new ArrayList<>();
+            boolean available = true;
+            switch (kind) {
+                case "vanilla" -> { acc.add("fabric"); acc.add("quilt"); }
+                case "neoforge" -> {
+                    if (has("fmlbridge.jar", missing)) {
+                        acc.add("neoforge");
+                        if (has("fabricbridge.jar", missing)) { acc.add("fabric"); acc.add("quilt"); }
+                        if (has("forgecompat.jar", missing)) acc.add("forge");
+                    } else { available = false; has("fabricbridge.jar", missing); has("forgecompat.jar", missing); }
+                }
+                case "forge" -> {
+                    if (has("fmlbridge-forge.jar", missing)) {
+                        acc.add("forge"); acc.add("neoforge");
+                        if (has("fabricbridge-forge.jar", missing)) { acc.add("fabric"); acc.add("quilt"); }
+                    } else { available = false; has("fabricbridge-forge.jar", missing); }
+                }
+                default -> { }
+            }
+            JsonObject p = new JsonObject();
+            p.addProperty("platform", kind); p.addProperty("mc", mc); p.addProperty("available", available);
+            JsonArray a = new JsonArray(); acc.forEach(a::add); p.add("accepts", a);
+            JsonArray m = new JsonArray(); missing.forEach(m::add); p.add("missingBridges", m);
+            out.add(p);
+        }
+        return out;
+    }
+    static boolean has(String bridge, List<String> missing) {
+        if (Files.isRegularFile(LoaderHome.bridge(bridge))) return true;
+        missing.add(bridge); return false;
     }
 
     /** The loader's own libraries, generated at build time from the real class path (tools/loader_libs.py). */
