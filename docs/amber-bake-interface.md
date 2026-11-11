@@ -12,7 +12,7 @@ Now `bake-instance`, `warm` and every launch run a static pass for each baked Fa
 
 Test switch: `-Damber.ul.noLambdaRetarget=true`.
 
-## Sandboxed launch (unreleased, after 0.3.1)
+## Sandboxed launch (loader 0.3.2)
 
 Jay plans to run the game in a sandbox that can write only the instance directory. A launch from a state file (`amber.ul.Launcher --state …`) now writes only under `<instanceDir>/.amber-ul/` (plus the game's own `gameDir`):
 
@@ -111,7 +111,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 - Every write goes to a temp file first and is then renamed atomically, so a killed process never leaves a corrupt cache.
 - `amber.ul.Bake version` prints:
   ```
-  {"loaderVersion":"0.3.1","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
+  {"loaderVersion":"0.3.2","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
    "supportedMc":["1.20.1","1.21.1"],
    "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
@@ -212,7 +212,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 `python -I tools/package.py` (after `bash build.sh`) writes `build/dist/amber-ul-<loaderVersion>/` and `build/dist/amber-ul-<loaderVersion>.zip` (the same folder, one top-level directory, fixed timestamps):
 
 ```
-amber-ul-0.3.1/
+amber-ul-0.3.2/
   loader.jar          the loader
   libs/*.jar          its libraries (unmodified official jars; manifest.libs gives Maven coordinates + url)
   bridges/            fmlbridge.jar, fabricbridge.jar (NeoForge 1.21.1), fmlbridge-forge.jar, fabricbridge-forge.jar
