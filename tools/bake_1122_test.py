@@ -72,6 +72,9 @@ if not os.path.isdir(MODS):
     for f in os.listdir(os.path.join(B, 'mods-small')):
         if f.endswith('.jar'): shutil.copy2(os.path.join(B, 'mods-small', f), MODS)
     shutil.copy2(os.path.join(R, 'legacytest', 'amber-worldtest-1122.jar'), MODS)
+# the world test mod is rebuilt with the loader: always use the current build
+wt = os.path.join(R, 'legacytest', 'amber-worldtest-1122.jar')
+if os.path.isfile(wt) and open(wt, 'rb').read() != open(os.path.join(MODS, 'amber-worldtest-1122.jar'), 'rb').read(): shutil.copy2(wt, MODS)
 os.makedirs(os.path.join(CACHE, 'baked'), exist_ok=True)
 mods = sorted(os.path.join(MODS, f) for f in os.listdir(MODS) if f.endswith('.jar'))
 REQ = {'schema': 'amber-ul/bake-instance-request@1', 'mcVersion': '1.12.2', 'side': 'client', 'gameJar': os.path.join(B, 'versions', '1.12.2', '1.12.2.jar'),
@@ -186,7 +189,11 @@ if '--no-launch' not in sys.argv:
     check('quickPlay singleplayer (1.12.2): launch.quickPlay via amber-ul, -Damber.ul.legacy.quickPlay', code == 0 and LQ and LQ.get('quickPlay') == {'singleplayer': 'amber-worldtest', 'via': 'amber-ul'}
           and '-Damber.ul.legacy.quickPlay=amber-worldtest' in LQ['jvmArgs'] and LQ['gameArgsPrefix'] == [], f'{code} {LQ and LQ.get("quickPlay")} {out[-2:]}')
     if LQ:
+        # JEI writes per-world settings into config/ (part of the cache key): put config/ back afterwards, so the next
+        # run of this test starts its cold/warm pair from the same files as always
+        cfg = os.path.join(GAME, 'config'); cfg_keep = os.path.join(T, 'config-before-quickplay'); shutil.rmtree(cfg_keep, ignore_errors=True); shutil.copytree(cfg, cfg_keep)
         m, s = launch('quickplay', stop='world', block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+        shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
         log = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
         check(f'quickPlay singleplayer (1.12.2): main menu up -> straight into the world, no menu interaction {m}', 'world' in m and 'failed' not in m
               and 'passive (not opening a world)' in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-worldtest' in log,
