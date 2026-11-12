@@ -14,7 +14,7 @@ block on Java 8 (docs/amber-bake-interface.md, v1.3.2):
 Inputs from tools/fetch_1122.py (mc/1.12.2, git-ignored); everything written under mc/bake1122/.
 --package: the loader and bridges from build/dist (tools/package.py), as Jay ships them.
 """
-import json, os, re, shutil, subprocess, sys, time, zipfile
+import json, os, re, shutil, subprocess, sys, threading, time, zipfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), '1.12.2'); LIB = os.path.join(B, 'libraries'); T = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), 'bake1122')
@@ -111,16 +111,22 @@ def _nbt_string_field(raw, name):
 def level_name(path):
     import gzip, struct
     raw = gzip.open(path).read(); o = _nbt_string_field(raw, 'LevelName'); n = struct.unpack('>H', raw[o:o + 2])[0]
-    return raw[o + 2:o + 2 + n].decode('utf-8')
+    # NBT strings are Java modified UTF-8: a character outside the BMP is two 3-byte surrogates
+    return raw[o + 2:o + 2 + n].decode('utf-8', 'surrogatepass').encode('utf-16-le', 'surrogatepass').decode('utf-16-le')
+
+def last_played(path):
+    import gzip, struct
+    raw = gzip.open(path).read(); key = b'\x04' + struct.pack('>H', 10) + b'LastPlayed'; k = raw.find(key)
+    return struct.unpack('>q', raw[k + len(key):k + len(key) + 8])[0] if k >= 0 else -1
 
 def set_level_name(path, name):
     import gzip, struct
     raw = gzip.open(path).read(); o = _nbt_string_field(raw, 'LevelName'); n = struct.unpack('>H', raw[o:o + 2])[0]
-    b = name.encode('utf-8'); raw = raw[:o] + struct.pack('>H', len(b)) + b + raw[o + 2 + n:]
+    b = name.encode('utf-8'); raw = raw[:o] + struct.pack('>H', len(b)) + b + raw[o + 2 + n:]   # ASCII names only (modified UTF-8 differs above the BMP)
     with gzip.open(path, 'wb') as f: f.write(raw)
 
 
-def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None, keep_world=False):
+def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None, keep_world=False, until=None):
     L_ = block or L
     nat = os.path.join(T, 'natives'); shutil.rmtree(nat, ignore_errors=True); os.makedirs(nat)
     for jar, excl in natives:
@@ -143,6 +149,7 @@ def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath
                                'failed': r'AMBER-WORLDTEST failed|Crash report saved|---- Minecraft Crash Report'}.items():
                     if k not in marks and re.search(pat, text): marks[k] = round(time.time() - t0, 1)
                 if at_world and 'world' in marks: at_world(); at_world = None
+                if until and 'until' not in marks and until(): marks['until'] = round(time.time() - t0, 1)
                 if stop in marks or 'failed' in marks: break
             time.sleep(3)   # one more stats.txt round (every 2 s)
         finally: p.kill(); p.wait()
@@ -176,7 +183,7 @@ if '--no-launch' not in sys.argv:
     check(f'warm launch: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/warm.log')
     check(f'warm launch hit the cache (hits {s.get("hits")}, misses {s.get("misses")})', int(s.get('hits', 0)) > 1000 and int(s.get('hits', 0)) > 10 * int(s.get('misses', 1)), {k: v for k, v in s.items() if k != '_log'})
     stats_mtime = os.path.getmtime(os.path.join(tc, 'stats.txt'))
-    m, s = launch('after-edit', stop='title', keep_world=True)   # no cacheDebug: no stats thread after loading
+    m, s = launch('after-edit', stop='title', extra=['-Damber.worldtest.open=false'], keep_world=True)   # no cacheDebug: no stats thread after loading
     check(f'config changed after loading -> new cache key on the next start ({warm_file} -> {s["_file"]}, {s["_loaded"]} cached classes)',
           'title' in m and s['_file'] and s['_file'] != warm_file and s['_loaded'] == 0, {k: v for k, v in s.items() if k != '_log'})
     check('without cacheDebug no stats.txt is written', os.path.getmtime(os.path.join(tc, 'stats.txt')) == stats_mtime)
@@ -190,11 +197,11 @@ if '--no-launch' not in sys.argv:
     check('transformerCache:false -> launch.cache.enabled false, no cache property', code == 0 and L2 and L2['cache'].get('enabled') is False
           and not any(a.startswith('-Damber.ul.legacy.cache=') for a in L2['jvmArgs']), L2 and L2['cache'])
     if L2:
-        m, s = launch('cache-off', stop='title', block=L2, keep_world=True)
+        m, s = launch('cache-off', stop='title', block=L2, extra=['-Damber.worldtest.open=false'], keep_world=True)
         check(f'cache off: stock LaunchWrapper reaches the title screen {m}', 'title' in m and 'failed' not in m and s['_file'] is None, f'see {T}/cache-off.log')
     blocker = os.path.join(T, 'not-a-dir'); open(blocker, 'w').write('x')
     L3 = dict(L, jvmArgs=[('-Damber.ul.legacy.cache=' + os.path.join(blocker, 'cache')) if a.startswith('-Damber.ul.legacy.cache=') else a for a in L['jvmArgs']])
-    m, s = launch('cache-broken', stop='title', block=L3, keep_world=True)
+    m, s = launch('cache-broken', stop='title', block=L3, extra=['-Damber.worldtest.open=false'], keep_world=True)
     probs3 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
     check(f'cache dir unusable: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
           and '@amber-ul/problem {"type":"problem"' in s['_log'] and any(p.get('code') == 'legacy_cache_disabled' and p.get('severity') == 'warning' for p in probs3), probs3)
@@ -202,7 +209,7 @@ if '--no-launch' not in sys.argv:
     with zipfile.ZipFile(L['classpath'][0]) as zi, zipfile.ZipFile(nolw, 'w') as zo:
         for n in zi.namelist():
             if '/lw/' not in n: zo.writestr(n, zi.read(n))
-    m, s = launch('cache-missing', stop='title', classpath=[nolw] + L['classpath'][1:], keep_world=True)
+    m, s = launch('cache-missing', stop='title', classpath=[nolw] + L['classpath'][1:], extra=['-Damber.worldtest.open=false'], keep_world=True)
     probs4 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
     check(f'bridge without the cache part: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
           and any(p.get('code') == 'legacy_cache_disabled' for p in probs4), probs4)
@@ -210,27 +217,28 @@ if '--no-launch' not in sys.argv:
     # v1.3.3 quick play, singleplayer: a copy of the world the warm run made, in a folder whose name differs from the
     # world's display name (level.dat LevelName) and is not ASCII, is opened by core-legacy as soon as the main menu is up,
     # as the world list does; the display name must survive. The world test mod is passive (it never opens a world).
-    QW = 'amber-qp-café'; QWD = os.path.join(GAME, 'saves', QW); QNAME = 'Quick Play Test Name'
+    QW = 'amber-qp-café-🙂'; QWD = os.path.join(GAME, 'saves', QW); QNAME = 'Quick Play Test Name'
     shutil.rmtree(QWD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), QWD, ignore=shutil.ignore_patterns('session.lock'))
-    set_level_name(os.path.join(QWD, 'level.dat'), QNAME)
+    set_level_name(os.path.join(QWD, 'level.dat'), QNAME); played0 = last_played(os.path.join(QWD, 'level.dat'))
     code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': QW}))
     rq = next((x for x in out if x['type'] == 'result'), None); LQ = rq and rq['launch']
     check('quickPlay singleplayer (1.12.2): launch.quickPlay via amber-ul, folder percent-encoded in -Damber.ul.legacy.quickPlay, non-ASCII warning',
-          code == 0 and LQ and LQ.get('quickPlay') == {'singleplayer': QW, 'via': 'amber-ul'} and '-Damber.ul.legacy.quickPlay=amber-qp-caf%C3%A9' in LQ['jvmArgs']
+          code == 0 and LQ and LQ.get('quickPlay') == {'singleplayer': QW, 'via': 'amber-ul'} and '-Damber.ul.legacy.quickPlay=amber-qp-caf%C3%A9-%F0%9F%99%82' in LQ['jvmArgs']
           and LQ['gameArgsPrefix'] == [] and any(x.get('code') == 'quickplay_world_name' and x.get('severity') == 'warning' for x in out), f'{code} {LQ and LQ.get("quickPlay")} {out[-2:]}')
     if LQ:
         # JEI writes per-world settings into config/ (part of the cache key): put config/ back afterwards, so the next
         # run of this test starts its cold/warm pair from the same files as always
         cfg = os.path.join(GAME, 'config'); cfg_keep = os.path.join(T, 'config-before-quickplay'); shutil.rmtree(cfg_keep, ignore_errors=True); shutil.copytree(cfg, cfg_keep)
-        try: m, s = launch('quickplay', stop='world', block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+        try: m, s = launch('quickplay', stop='world_60s', block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
         finally: shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
         log = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
-        check(f'quickPlay singleplayer (1.12.2): main menu up -> straight into the world, no menu interaction {m}', 'world' in m and 'failed' not in m
-              and 'passive (not opening a world)' in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-qp-caf' in log,
+        check(f'quickPlay singleplayer (1.12.2): main menu up -> straight into the world, no menu interaction {m}', 'world_60s' in m and 'failed' not in m
+              and 'AMBER-WORLDTEST title screen, opening world' not in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-qp-caf' in log,
               f'see {T}/quickplay.log')
-        time.sleep(1)
+        time.sleep(1); played1 = last_played(os.path.join(QWD, 'level.dat'))
+        check(f'quickPlay singleplayer (1.12.2): level.dat was written back by the game while in the world (LastPlayed {played0} -> {played1})', played1 > played0)
         check(f'quickPlay singleplayer (1.12.2): the world keeps its display name (level.dat LevelName {level_name(os.path.join(QWD, "level.dat"))!r})',
-              level_name(os.path.join(QWD, 'level.dat')) == QNAME)
+              played1 > played0 and level_name(os.path.join(QWD, 'level.dat')) == QNAME)
     shutil.rmtree(QWD, ignore_errors=True)
 
 # refusals
@@ -279,12 +287,61 @@ code, out, err = bake('bake-instance', dict(REQ, quickPlay={'multiplayer': '[::1
 rq = next((x for x in out if x['type'] == 'result'), None)
 check('quickPlay multiplayer (1.12.2): an IPv6 host goes to --server in brackets (FML joins host:port)', code == 0 and rq and rq['launch']['gameArgsPrefix'] == ['--server', '[::1]', '--port', '25566']
       and rq['launch']['quickPlay'] == {'multiplayer': '[::1]:25566', 'via': 'game'}, f'{code} {rq and rq["launch"]["gameArgsPrefix"]}')
+if '--no-launch' not in sys.argv:
+    import socket
+    def handshake_listener(family, addr):
+        # a plain TCP listener that answers nothing: records the first packet (the 1.12.2 handshake) of every connection the
+        # game makes and closes it; never a server. FML's --server first pings (next state 1, status), then joins (state 2, login).
+        srv = socket.socket(family, socket.SOCK_STREAM); srv.bind((addr, 0)); srv.listen(4); got = []
+        def varint(b, i):
+            v = s = 0
+            while True:
+                x = b[i]; i += 1; v |= (x & 0x7f) << s; s += 7
+                if not x & 0x80: return v, i
+        def run():
+            srv.settimeout(900)
+            while not any(h.get('state') == 2 for h in got):
+                try: c, _ = srv.accept()
+                except OSError: return
+                c.settimeout(10); buf = b''
+                try:
+                    while len(buf) < 300:
+                        d = c.recv(300)
+                        if not d: break
+                        buf += d
+                        try:
+                            n, i = varint(buf, 0)
+                            if len(buf) >= i + n: break
+                        except IndexError: pass
+                except OSError: pass
+                try:
+                    n, i = varint(buf, 0); pid, i = varint(buf, i); proto, i = varint(buf, i); hl, i = varint(buf, i)
+                    host = buf[i:i + hl].decode('utf-8', 'replace'); i += hl; port = int.from_bytes(buf[i:i + 2], 'big'); state, _ = varint(buf, i + 2)
+                    got.append(dict(pid=pid, protocol=proto, host=host, port=port, state=state))
+                except Exception as e: got.append({'error': repr(e)})
+                c.close()
+            srv.close()
+        threading.Thread(target=run, daemon=True).start()
+        return srv.getsockname()[1], got
+    for fam, addr, shown in [(socket.AF_INET, '127.0.0.1', '127.0.0.1'), (socket.AF_INET6, '::1', '[::1]')]:
+        port, got = handshake_listener(fam, addr)
+        code, out, err = bake('bake-instance', dict(REQ, quickPlay={'multiplayer': f'{shown}:{port}'}))
+        rq = next((x for x in out if x['type'] == 'result'), None)
+        if not rq: check(f'quickPlay multiplayer (1.12.2) {shown}: bake', False, f'{code} {out[-1:]}'); continue
+        m, s = launch(f'quickplay-mp-{fam.name}', stop='until', block=rq['launch'], extra=['-Damber.worldtest.open=false'], keep_world=True, until=lambda: any(h.get('state') == 2 for h in got))
+        login = next((h for h in got if h.get('state') == 2), {})
+        check(f'quickPlay multiplayer (1.12.2) {shown}:{port}: the game joins straight after loading (handshakes {got}) {m}', 'until' in m and login.get('pid') == 0
+              and login.get('protocol') == 340 and login.get('port') == port and login.get('host', '').split('\0')[0] in (addr, shown), f'see {T}/quickplay-mp-{fam.name}.log')
 for qp, what in [({'singleplayer': 'no-such-world'}, 'missing world'), ({'singleplayer': '../outside'}, 'path outside saves/'), ({'singleplayer': 'a', 'multiplayer': 'b:1'}, 'both modes'),
                  ({'multiplayer': 'host:0'}, 'port 0'), ({'multiplayer': '::1:25565'}, 'bare IPv6'), ({'singleplayer': ['amber-worldtest']}, 'a one-element array'),
                  ({'singleplayer': 5}, 'a number'), ({'singleplayer': None}, 'null'), ({'multiplayer': '-host:25565'}, 'host starting with -'),
-                 ({'multiplayer': 'host%x:25565'}, '% in a host name'), ({'singleplayer': 'bad<name>'}, 'not a valid folder name on Windows'), ({'multiplayer': 'host:+80'}, 'port +80')]:
+                 ({'multiplayer': 'host%x:25565'}, '% in a host name'), ({'singleplayer': 'bad<name>'}, 'not a valid folder name on Windows'), ({'multiplayer': 'host:+80'}, 'port +80'),
+                 ({'singleplayer': 'AMBER-WORLDTEST'}, 'folder name in another case'), ({'singleplayer': 'a\ud83d'}, 'an unpaired surrogate')]:
     code, out, err = bake('bake-instance', dict(REQ, quickPlay=qp))
     check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'quickPlay' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+for extra, what in [({'side': 'server'}, 'side server'), ({'gameDir': None, 'instanceDir': 5}, 'instanceDir not a string')]:
+    code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-worldtest'}, **extra))
+    check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' for x in out), f'{code} {out[-1:]}')
 code, out, err = bake('bake-instance', REQ)   # back to the real install for the gc check
 
 # gc: the legacy state has no cacheFiles; an old cacheRoot/legacy-1.12.2 dir is managed

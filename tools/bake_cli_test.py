@@ -9,7 +9,7 @@ census run (bakes everything, loads every Mixin target). Vanilla: Fabric mod set
 warm + gc (v1.1): warm on both states; gc dry runs and refusals on both caches; gc apply only on mc/bakecli/forge-cache
 (the vanilla cache mc/ulcache-world is shared with other test states, so it only gets a dry run).
 """
-import json, os, shutil, subprocess, sys, threading, time
+import json, os, re, shutil, subprocess, sys, threading, time
 # the prototype root as the JVM sees it (tools/proto_root.py: ASCII path or its junction)
 R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proto_root.py')], capture_output=True, text=True, check=True).stdout.strip()
 MC = (os.environ.get('AMBER_UL_MC') or f'{R}/mc').replace(chr(92), '/'); T = f'{MC}/bakecli'; JAVA = os.environ.get('JAVA') or (f'{R}/tools/jre21/bin/java.exe' if os.path.isfile(f'{R}/tools/jre21/bin/java.exe') else shutil.which('java'))
@@ -264,7 +264,8 @@ def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     if not res: return
     t = time.time(); ok, seen = launch(f'{kind}-qp', res[0], ver, mcv, gamedir, 'joined the game', [], [])
     log = open(f'{T}/{kind}-qp.log', encoding='utf-8', errors='replace').read()
-    check(f'quickPlay {kind}: straight into world {world} ({time.time() - t:.0f} s), title screen never opened', ok and 'TitleScreen.init' not in log
+    check(f'quickPlay {kind}: straight into world {world} ({time.time() - t:.0f} s), title screen never opened, the quick play hook ran', ok and 'TitleScreen.init' not in log
+          and re.search(r'\[amber-ul\] @\d+ ms .*QuickPlay', log) is not None
           and not any(m in log for m in ('[amber-worldtest] creating world', '[amber-worldtest] opening existing', '[amber-fwt] title screen')), str(seen[-3:]))
     code, out, err = bake('bake-instance', dict(req, quickPlay={'multiplayer': '[::1]:25566'})); res = [x for x in out if x['type'] == 'result']
     check(f'quickPlay {kind}: multiplayer -> --quickPlayMultiplayer [::1]:25566 (block only, no server started)', code == 0 and res and res[0]['launch']['gameArgsPrefix'][-2:] == ['--quickPlayMultiplayer', '[::1]:25566'], f'{code} {out[-1:]}')
