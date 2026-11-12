@@ -47,6 +47,8 @@ public final class LegacyLaunch {
         }
         String quick = System.getProperty(LegacyQuickPlay.PROPERTY);
         if (quick != null && !quick.isEmpty()) LegacyQuickPlay.start(quick);   // v1.3.3: open this world once the main menu is up
+        String maint = System.getProperty(LegacyMaintenance.PROPERTY);
+        if (maint != null && !maint.isEmpty()) LegacyMaintenance.start(maint);   // v1.3.3 maintenance mode
         try { run(launch, args); }
         catch (Throwable t) {
             Throwable root = t; while (root.getCause() != null && root.getCause() != root) root = root.getCause();

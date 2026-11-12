@@ -30,7 +30,7 @@ final class LegacyPlatform {
     /** Mod ids FML 1.12 itself provides. */
     static final Set<String> BUILTIN = Set.of("minecraft", "mcp", "fml", "forge");
 
-    static int bakeInstance(JsonObject q, JsonObject pf, QuickPlay quick) throws Exception {
+    static int bakeInstance(JsonObject q, JsonObject pf, QuickPlay quick, Maintenance maint) throws Exception {
         String mc = Bake.str(q, "mcVersion");
         Path game = Bake.path(q, "gameJar"), cacheRoot = Bake.path(q, "cacheRoot"), installDir = Bake.path(pf, "installDir");
         Path bridge = LoaderHome.bridge(BRIDGE);
@@ -135,6 +135,7 @@ final class LegacyPlatform {
         jvm.add("-Dlog4j2.formatMsgNoLookups=true");   // Forge 2860 ships log4j 2.15.0
         JsonArray pre = new JsonArray();   // LegacyLaunch adds FML's tweaker
         if (quick != null) { quick.legacyArgs(jvm, pre); launch.add("quickPlay", quick.json(quick.singleplayer != null ? "amber-ul" : "game")); }   // v1.3.3
+        if (maint != null) { maint.jvmArgs(jvm); launch.add("maintenance", maint.json()); }   // v1.3.3: core-legacy LegacyMaintenance
         launch.add("jvmArgs", jvm);
         launch.add("gameArgsPrefix", pre);
         launch.addProperty("javaMin", 8); launch.addProperty("javaMax", 8);

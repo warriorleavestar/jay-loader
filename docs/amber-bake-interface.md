@@ -1,6 +1,6 @@
 # Interface between the universal loader and Amber's bake framework (v1.3.1)
 
-v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; v1.3.2 2026-11-12; **v1.3.3 2026-11-12**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
+v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; v1.3.2 2026-11-12; **v1.3.3 2026-11-12** (quick play; maintenance mode). Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
 
 ## Bake-time mixin pass (NeoForge platform, 2026-11-11)
 
@@ -303,3 +303,37 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - On 1.20.1 / 1.21.1 the title screen is never shown. The loader's "title screen reached" moment (class cache save, `fabric_init_not_run` check) fires when the game's quick play starts the join (`QuickPlay.joinSingleplayerWorld` / `joinMultiplayerWorld`, after the first resource reload). If the world or server cannot be reached the game shows its own error screen and returns to the menu.
 - On Forge 1.12.2 singleplayer, core-legacy waits until FML has finished loading and the main menu is up. That is vanilla's `GuiMainMenu`, a subclass, or a replacement such as CustomMainMenu's (RLCraft). It then opens the world on the client thread, with the same call the world list uses. FML's own questions (missing mods, an old save) still appear. If the menu never comes up (default wait 30 minutes, `-Damber.ul.legacy.quickPlayWaitMs`) or the world fails to open, the game stays on the menu and core-legacy reports `legacy_quickplay_failed` as a runtime problem (warning or error; `world`).
 - Everything runs inside the normal game client (its integrated server for singleplayer). Nothing is written by the bake; the game writes only its own files in `gameDir`.
+
+## v1.3.3: maintenance mode (additive)
+
+A launch of the normal game client that prepares one singleplayer world and then quits by itself. It never starts a dedicated server and never reads or writes `eula.txt`.
+
+- `bake-instance` takes an optional `maintenance` (side `client` only, not together with `quickPlay`):
+  ```
+  "maintenance": {"world": "<world folder>", "upgrade": true, "pregenRadius": 32}
+  ```
+  - `world`: a folder under `<gameDir>/saves/`, with the same rules as `quickPlay.singleplayer`. It must exist. The bake reads its `level.dat` (`Data.DataVersion`) and writes nothing.
+  - `upgrade` (default `true`): on 1.20.1 / 1.21.1, a world last saved by an older game version first goes through the game's own world upgrader, the "Optimize World" button of the world list (`OptimizeWorldScreen` / `WorldUpgrader`, cache not erased). `false`: the game opens it as it would any old world.
+  - `pregenRadius` (default 0, at most 512): overworld chunks around the world spawn to generate on top of the spawn area. The spawn area is always generated: 8 chunks around the world spawn (17 × 17).
+  - `bad_request` (exit 1, before anything is baked): an unknown key, a missing world, a world folder that is not one path segment, a world saved by a newer game, `upgrade` that is not a boolean, a radius that is not a whole number 0-512, `quickPlay` in the same request, side `server`.
+  - Not part of `stateKey`: a bake that only adds or changes `maintenance` reuses every cached file.
+- The launch block then carries `launch.maintenance` and the `-Damber.ul.maintenance*` JVM properties that make it happen (nothing extra to append):
+  ```
+  "maintenance": {"world": "...", "upgrade": "needed" | "not needed" | "off" | "game", "worldDataVersion": 3465, "gameDataVersion": 3955,
+                  "spawnRadius": 8, "pregenRadius": 32, "progressFile": "<world>/amber-ul-pregen.json", "cancelFile": "<instanceDir>/.amber-ul/maintenance.cancel"}
+  ```
+- What the launch does, all inside the client and its integrated server, through the game's own code:
+  1. at the first title screen: the upgrade, if needed (the game's own progress screen is shown);
+  2. the world is opened, as a click in the world list would;
+  3. the overworld chunks in a square spiral around the world spawn are loaded through the server's own chunk cache (generated if missing): first the spawn area, then out to `pregenRadius`;
+  4. the world is saved and closed ("Save and Quit to Title"), and the game exits with code 0.
+- Progress: one JSON object per line on stdout behind `@amber-ul/progress ` (about once a second while a step runs):
+  ```
+  {"type":"progress","schema":"amber-ul/maintenance-progress@1","stage":"maintenance","step":"<step>","done":n,"total":m,"world":"...","message"?:"..."}
+  ```
+  steps in order: `start`, `upgrade` (`done`/`total` = chunks, `message` = the game's status text; the last one has `message` `"upgraded"`), `open` (0/1, then 1/1), `resume` (when an earlier run's place is picked up), `spawn` (chunks of the spawn area), `pregen` (chunks of the whole square, spawn area included), then `done`, `cancelled` or `failed`, and last `quit`.
+- Resumable: after each forced save (every 30 s or 4096 chunks, and at the end or on cancel), the place in the spiral is written to `progressFile` (`{"schema":"amber-ul/pregen@1","dimension":"minecraft:overworld","centerX","centerZ","radius","done","total","complete"}`; chunks are flushed to disk before the index). A later maintenance run of the same world with the same spawn continues from there. A bigger radius continues the same spiral. Closing the game or killing it loses at most the work since the last save. The upgrade itself is the game's and is not resumable: a cancelled upgrade starts again.
+- Cancel: create `cancelFile` (any content). The run stops at the next batch, saves its place, reports `cancelled` and quits normally. A cancelled upgrade leaves the world unopened. A stale cancel file is deleted when maintenance starts. Closing the game window also stops it.
+- Failures: `maintenance_failed` (error; `world`) in the runtime problems, a `failed` progress line, then the game quits.
+- Forge 1.12.2: core-legacy does the same steps once FML has finished and the main menu is up (vanilla's or a replacement, as for quick play). There is no separate upgrade step (`"upgrade": "game"`): the 1.12.2 game converts older saves itself while it loads them, as it always does. Chunks are loaded through `ChunkProviderServer.provideChunk` and queued for unloading right after (the spawn area stays loaded, as in the game), and saved with `saveAllChunks` + `flushToDisk`. The progress lines, the progress file and the cancel file are the same. The progress file is shared between versions: the same spiral order is used on every version.
+- `upgrade: false` on an older world: the game asks its own "back up first?" question when the world is opened, and a person has to answer it. The run waits for that (up to 30 minutes, `-Damber.ul.maintenance.openWaitMs`).

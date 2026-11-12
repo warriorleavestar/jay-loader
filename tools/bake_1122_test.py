@@ -14,7 +14,7 @@ block on Java 8 (docs/amber-bake-interface.md, v1.3.2):
 Inputs from tools/fetch_1122.py (mc/1.12.2, git-ignored); everything written under mc/bake1122/.
 --package: the loader and bridges from build/dist (tools/package.py), as Jay ships them.
 """
-import json, os, re, shutil, subprocess, sys, time, zipfile
+import json, os, re, shutil, subprocess, sys, threading, time, zipfile
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), '1.12.2'); LIB = os.path.join(B, 'libraries'); T = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), 'bake1122')
@@ -124,6 +124,7 @@ def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath
                     if k not in marks and re.search(pat, text): marks[k] = round(time.time() - t0, 1)
                 if at_world and 'world' in marks: at_world(); at_world = None
                 if stop in marks or 'failed' in marks: break
+            if p.poll() is not None: marks['exit'] = p.returncode   # the game quit by itself (maintenance)
             time.sleep(3)   # one more stats.txt round (every 2 s)
         finally: p.kill(); p.wait()
     st = os.path.join(tc, 'stats.txt')
@@ -199,6 +200,58 @@ if '--no-launch' not in sys.argv:
               and 'passive (not opening a world)' in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-worldtest' in log,
               f'see {T}/quickplay.log')
 
+    # v1.3.3 maintenance mode: core-legacy opens the world once the main menu is up, generates the spawn area and the
+    # radius around the world spawn in the integrated server, saves, quits; cancel file + resume
+    def progress_of(label):
+        out_ = open(os.path.join(T, label + '.log'), encoding='utf-8', errors='replace').read()
+        return [json.loads(l.split('@amber-ul/progress ', 1)[1]) for l in out_.splitlines() if '@amber-ul/progress {' in l]
+    def steps(pr, st): return [x for x in pr if x.get('step') == st]
+    def tail(pr): return [(x['step'], x['done'], x['total']) for x in pr[-5:]]
+    MW = 'amber-mt'; MWD = os.path.join(GAME, 'saves', MW)
+    if os.path.isfile(os.path.join(GAME, 'saves', 'amber-worldtest', 'level.dat')):
+        shutil.rmtree(MWD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        cfg = os.path.join(GAME, 'config'); cfg_keep = os.path.join(T, 'config-before-maintenance'); shutil.rmtree(cfg_keep, ignore_errors=True); shutil.copytree(cfg, cfg_keep)
+        eula_before = os.path.exists(os.path.join(GAME, 'eula.txt'))
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 12}))
+        rq = next((x for x in out if x['type'] == 'result'), None); LM = rq and rq['launch']; M = (LM or {}).get('maintenance', {})
+        check('maintenance (1.12.2): launch.maintenance (upgrade by the game on load, spawn 8, radius 12), properties for core-legacy', code == 0 and M.get('upgrade') == 'game'
+              and M.get('worldDataVersion') == 1343 and M.get('pregenRadius') == 12 and '-Damber.ul.maintenance=' + MW in LM['jvmArgs'] and LM['gameArgsPrefix'] == [], f'{code} {M} {out[-1:]}')
+        if LM:
+            t0 = time.time(); m, s = launch('maintenance', stop='never', timeout=1800, block=LM, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance'); pfp = os.path.join(MWD, 'amber-ul-pregen.json'); pf = json.load(open(pfp)) if os.path.exists(pfp) else {}
+            sp, pg = steps(pr, 'spawn'), steps(pr, 'pregen')
+            latest_ = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
+            check(f'maintenance (1.12.2): spawn 289, pregen 625, done, the game quit by itself ({time.time() - t0:.0f} s, {m})', m.get('exit') == 0 and 'failed' not in m
+                  and sp and sp[-1]['done'] == 289 and pg and pg[-1]['done'] == pg[-1]['total'] == 625 and steps(pr, 'done') and steps(pr, 'quit') and pf.get('complete') is True
+                  and 'maintenance: main menu up' in latest_ and 'passive (not opening a world)' in latest_, f'{tail(pr)} {pf} see {T}/maintenance.log')
+            check('maintenance (1.12.2): progress lines are JSON with schema/world; eula.txt untouched', pr and all(x.get('schema') == 'amber-ul/maintenance-progress@1' and x.get('world') == MW for x in pr)
+                  and os.path.exists(os.path.join(GAME, 'eula.txt')) == eula_before, pr[:2])
+            code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 20}))
+            LM2 = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch')
+            if LM2:
+                cf = LM2['maintenance']['cancelFile']
+                def watch():   # follows the stdout log; creates the cancel file once 800 chunks are done (the launcher's Cancel button)
+                    while True:
+                        time.sleep(0.5)
+                        try: pr_ = progress_of('maintenance-cancel')
+                        except Exception: continue
+                        if any(x.get('step') == 'pregen' and x['done'] >= 800 for x in pr_): open(cf, 'w').close(); return
+                        if any(x.get('step') in ('done', 'quit', 'failed') for x in pr_): return
+                open(os.path.join(T, 'maintenance-cancel.log'), 'w').close()
+                threading.Thread(target=watch, daemon=True).start()
+                m, s = launch('maintenance-cancel', stop='never', timeout=1800, block=LM2, extra=['-Damber.worldtest.open=false'], keep_world=True)
+                pr = progress_of('maintenance-cancel'); pf = json.load(open(pfp))
+                rs = steps(pr, 'resume')
+                check(f'maintenance (1.12.2): radius 20 resumes at 625; cancel file -> stops, keeps its place ({pf.get("done")}/{pf.get("total")}), quits ({m})', m.get('exit') == 0
+                      and rs and rs[0]['done'] == 625 and steps(pr, 'cancelled') and pf.get('complete') is False and 800 <= pf.get('done', 0) < 1681 and not os.path.exists(cf), tail(pr))
+                stopped = pf.get('done')
+                m, s = launch('maintenance-resume', stop='never', timeout=1800, block=LM2, extra=['-Damber.worldtest.open=false'], keep_world=True)
+                pr = progress_of('maintenance-resume'); pf = json.load(open(pfp)); rs = steps(pr, 'resume')
+                check(f'maintenance (1.12.2): next run continues at {stopped}, finishes 1681 ({m})', m.get('exit') == 0 and rs and rs[0]['done'] == stopped
+                      and steps(pr, 'done') and pf.get('complete') is True and pf.get('done') == 1681, tail(pr))
+        shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
+    else: check('maintenance (1.12.2): needs the warm run world', False)
+
 # refusals
 code, out, err = bake('bake-instance', dict(REQ, mods=[{'path': m} for m in mods if 'mixinbooter' not in os.path.basename(m).lower()]))   # UniversalTweaks requires mixinbooter
 probs = [x for x in out if x['type'] == 'problem']
@@ -245,6 +298,15 @@ for qp, what in [({'singleplayer': 'no-such-world'}, 'missing world'), ({'single
                  ({'multiplayer': 'host:0'}, 'port 0'), ({'multiplayer': '::1:25565'}, 'bare IPv6')]:
     code, out, err = bake('bake-instance', dict(REQ, quickPlay=qp))
     check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'quickPlay' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+# v1.3.3 maintenance refusals (bake only)
+import gzip, struct
+os.makedirs(os.path.join(GAME, 'saves', 'amber-mt-newer'), exist_ok=True)
+with gzip.open(os.path.join(GAME, 'saves', 'amber-mt-newer', 'level.dat'), 'wb') as f: f.write(b'\x0a\x00\x00\x0a\x00\x04Data\x03\x00\x0bDataVersion' + struct.pack('>i', 3955) + b'\x00\x00')
+for mt, extra, what in [({'world': 'amber-worldtest'}, {'quickPlay': {'singleplayer': 'amber-worldtest'}}, 'with quickPlay'), ({'world': 'amber-mt-newer'}, {}, 'a 1.21.1 world'),
+                        ({'world': 'no-such-world'}, {}, 'missing world'), ({'world': 'amber-worldtest', 'pregenRadius': 513}, {}, 'radius 513')]:
+    code, out, err = bake('bake-instance', dict(REQ, maintenance=mt, **extra))
+    check(f'maintenance refused (1.12.2): {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'aintenance' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+shutil.rmtree(os.path.join(GAME, 'saves', 'amber-mt-newer'), ignore_errors=True)
 code, out, err = bake('bake-instance', REQ)   # back to the real install for the gc check
 
 # gc: the legacy state has no cacheFiles; an old cacheRoot/legacy-1.12.2 dir is managed

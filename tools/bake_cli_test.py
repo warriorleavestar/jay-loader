@@ -203,6 +203,9 @@ def forge():
             d = f'{MC}/game-forge/saves'; ws = [w for w in os.listdir(d) if w.startswith('amber-qp-') and os.path.isfile(f'{d}/{w}/level.dat')] if os.path.isdir(d) else []
             return max(ws, key=lambda w: os.path.getmtime(f'{d}/{w}/level.dat')) if ws else None
         quickplay('forge', req, ver, mcv, f'{MC}/game-forge', ['-Damber.forgeworldtest=amber-qp'], newest)
+    if MT:
+        d = f'{MC}/game-forge/saves'; ws = [x for x in os.listdir(d) if x.startswith('amber-qp-') and os.path.isfile(f'{d}/{x}/level.dat')] if os.path.isdir(d) else []
+        maintenance('forge', req, ver, mcv, f'{MC}/game-forge', max(ws, key=lambda x: os.path.getmtime(f'{d}/{x}/level.dat')) if ws else None)
 
 def vanilla():
     mcv = '1.21.1'; ver, ls = libs(mcv, f'{MC}/libraries')
@@ -246,6 +249,7 @@ def vanilla():
     check('launch from the state file to the title screen', ok, str(seen[-3:]))
     problems_file('vanilla launch', res[0], seen)
     if QP: quickplay('vanilla', req, ver, mcv, f'{MC}/game', ['-Damber.autoworld=amber-qp'], lambda: 'amber-qp' if os.path.isfile(f'{MC}/game/saves/amber-qp/level.dat') else None)
+    if MT: maintenance('vanilla', req, ver, mcv, f'{MC}/game', 'amber-qp' if os.path.isfile(f'{MC}/game/saves/amber-qp/level.dat') else None)
 
 def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     """v1.3.3 quick play on 1.20.1 / 1.21.1: a world made by the world test mod in one run is entered in the next one with
@@ -271,6 +275,130 @@ def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     check(f'quickPlay {kind}: missing world -> bad_request before any bake', code == 1 and any(x.get('code') == 'bad_request' for x in out), f'{code} {out[-1:]}')
 
 QP = any(a == 'quickplay' for a in sys.argv[1:]) or next((a for a in sys.argv[1:] if not a.startswith('--')), 'all') == 'all'
+MT = any(a == 'maintenance' for a in sys.argv[1:]) or next((a for a in sys.argv[1:] if not a.startswith('--')), 'all') == 'all'
+OLD_WORLD = f'{MC}/1.12.2/game-official-small/saves/amber-worldtest'   # saved by 1.12.2 (DataVersion 1343): "an old save"
+
+def run_maint(label, res, ver, mcv, gamedir, cancel_when=None, timeout=1800):
+    """Maintenance launch: the game must quit by itself. Returns (exit code or None on timeout, progress objects, log text).
+    cancel_when(progress) -> True: create launch.maintenance.cancelFile (what a launcher's Cancel button does)."""
+    L = res['launch']
+    game = ['--username', 'AmberTest', '--version', mcv, '--gameDir', gamedir, '--assetsDir', f'{MC}/assets', '--assetIndex', ver['assetIndex']['id'],
+            '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--versionType', 'release']
+    jvm = ['-Xmx3G', '-Dstdout.encoding=UTF-8', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
+           f'-Dorg.lwjgl.system.SharedLibraryExtractPath={MC}/natives', f'-Djna.tmpdir={MC}/natives']
+    cmd = [JAVA] + L['jvmArgs'] + jvm + ['-cp', ';'.join(L['classpath']), L['mainClass']] + L['gameArgsPrefix'] + game
+    log = open(f'{T}/{label}.log', 'w', encoding='utf-8'); prog = []; cancelled = []
+    p = subprocess.Popen(cmd, cwd=gamedir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    def pump():
+        for raw in p.stdout:
+            line = raw.decode('utf-8', 'replace').rstrip(); log.write(line + '\n'); log.flush()
+            if '@amber-ul/progress ' in line:
+                try: o = json.loads(line.split('@amber-ul/progress ', 1)[1])
+                except ValueError: continue
+                prog.append(o)
+                if cancel_when and not cancelled and cancel_when(o): cancelled.append(1); open(L['maintenance']['cancelFile'], 'w').close()   # once: the game deletes it
+    th = threading.Thread(target=pump, daemon=True); th.start()
+    try: code = p.wait(timeout)
+    except subprocess.TimeoutExpired: p.kill(); p.wait(); code = None
+    th.join(10); log.close()
+    return code, prog, open(f'{T}/{label}.log', encoding='utf-8', errors='replace').read()
+
+def level_dv(path):
+    """Data.DataVersion of a level.dat (small NBT walk, enough for this check)."""
+    import gzip, struct
+    b = gzip.open(path).read()
+    def s(i): n = struct.unpack('>H', b[i:i + 2])[0]; return b[i + 2:i + 2 + n].decode('utf-8', 'replace'), i + 2 + n
+    def skip(t, i):
+        if t == 1: return i + 1
+        if t == 2: return i + 2
+        if t in (3, 5): return i + 4
+        if t in (4, 6): return i + 8
+        if t == 7: return i + 4 + struct.unpack('>i', b[i:i + 4])[0]
+        if t == 8: return s(i)[1]
+        if t == 9:
+            et = b[i]; n = struct.unpack('>i', b[i + 1:i + 5])[0]; i += 5
+            for _ in range(n): i = skip(et, i)
+            return i
+        if t == 10:
+            while b[i] != 0: t2 = b[i]; _, i = s(i + 1); i = skip(t2, i)
+            return i + 1
+        if t == 11: return i + 4 + 4 * struct.unpack('>i', b[i:i + 4])[0]
+        if t == 12: return i + 4 + 8 * struct.unpack('>i', b[i:i + 4])[0]
+        raise ValueError(t)
+    def walk(i, want):
+        while b[i] != 0:
+            t = b[i]; name, i = s(i + 1)
+            if want == 'Data' and t == 10 and name == 'Data': return walk(i, 'DataVersion')
+            if want == 'DataVersion' and t == 3 and name == 'DataVersion': return struct.unpack('>i', b[i:i + 4])[0]
+            i = skip(t, i)
+        return -1
+    return walk(s(1)[1], 'Data')
+
+def maintenance(kind, req, ver, mcv, gamedir, fresh_world):
+    """v1.3.3 maintenance mode on 1.20.1 / 1.21.1: the normal client opens the world in its integrated server, generates
+    the spawn chunks (always) and the requested radius (resumable, cancellable), upgrades an old save with the game's
+    own upgrader first, and quits by itself. No dedicated server, no eula.txt."""
+    saves = f'{gamedir}/saves'; game_dv = {'1.21.1': 3955, '1.20.1': 3465}[mcv]
+    eula_before = os.path.exists(f'{gamedir}/eula.txt')
+    def prep(name, src):
+        shutil.rmtree(f'{saves}/{name}', ignore_errors=True); shutil.copytree(src, f'{saves}/{name}', ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+    def steps(prog, step): return [p for p in prog if p.get('step') == step]
+    def regions(name): d = f'{saves}/{name}/region'; return sum(os.path.getsize(f'{d}/{f}') for f in os.listdir(d)) if os.path.isdir(d) else 0
+    def tail(prog, n=6): return [(p['step'], p['done'], p['total'], p.get('message')) for p in prog[-n:]]
+    if not fresh_world: check(f'maintenance {kind}: needs the quick play world', False); return
+    # 1. current-version world: spawn (always) + radius 12
+    w = 'amber-mt'; prep(w, f'{saves}/{fresh_world}'); before = regions(w)
+    code, out, err = bake('bake-instance', dict(req, maintenance={'world': w, 'pregenRadius': 12})); res = [x for x in out if x['type'] == 'result']
+    L = res[0]['launch'] if res else {}; M = L.get('maintenance', {})
+    check(f'maintenance {kind}: launch.maintenance (upgrade not needed, spawn 8, radius 12), jvm properties, no quick play args',
+          code == 0 and M.get('world') == w and M.get('upgrade') == 'not needed' and M.get('spawnRadius') == 8 and M.get('pregenRadius') == 12 and M.get('gameDataVersion') == game_dv
+          and f'-Damber.ul.maintenance={w}' in L['jvmArgs'] and '-Damber.ul.maintenance.radius=12' in L['jvmArgs'] and not any(a.startswith('--quickPlay') for a in L['gameArgsPrefix']), f'{code} {M} {out[-1:]}')
+    if not res: return
+    t = time.time(); code, prog, log = run_maint(f'{kind}-mt', res[0], ver, mcv, gamedir)
+    pfp = f'{saves}/{w}/amber-ul-pregen.json'; pf = json.load(open(pfp)) if os.path.exists(pfp) else {}
+    sp, pg = steps(prog, 'spawn'), steps(prog, 'pregen')
+    check(f'maintenance {kind}: spawn 289 then pregen 625 chunks, done, game quit by itself ({time.time() - t:.0f} s, exit {code})',
+          code == 0 and sp and sp[-1]['done'] == sp[-1]['total'] == 289 and pg and pg[-1]['done'] == pg[-1]['total'] == 625 and steps(prog, 'done') and steps(prog, 'quit')
+          and not steps(prog, 'upgrade') and pf.get('complete') is True and pf.get('done') == 625 and regions(w) > before, f'{tail(prog)} {pf} see {T}/{kind}-mt.log')
+    check(f'maintenance {kind}: progress lines are JSON with schema and stage', prog and all(p.get('schema') == 'amber-ul/maintenance-progress@1' and p.get('stage') == 'maintenance' and p.get('world') == w for p in prog), prog[:2])
+    check(f'maintenance {kind}: integrated server only (no dedicated server, eula.txt untouched)', 'Starting integrated minecraft server' in log
+          and L['mainClass'] != 'net.minecraft.server.Main' and os.path.exists(f'{gamedir}/eula.txt') == eula_before and not os.path.exists(f'{saves}/{w}/eula.txt'), f'see {T}/{kind}-mt.log')
+    # 2. a bigger radius resumes at 625; cancel part-way; the next run continues
+    code, out, err = bake('bake-instance', dict(req, maintenance={'world': w, 'pregenRadius': 24})); res = [x for x in out if x['type'] == 'result']
+    if not res: check(f'maintenance {kind}: bake radius 24', False, f'{code} {out[-1:]}'); return
+    code, prog, log = run_maint(f'{kind}-mt-cancel', res[0], ver, mcv, gamedir, cancel_when=lambda p: p.get('step') == 'pregen' and p['done'] >= 1000)
+    pf = json.load(open(pfp)); rs = steps(prog, 'resume')
+    check(f'maintenance {kind}: radius 24 resumes at 625; cancel file -> stops, keeps its place ({pf.get("done")}/{pf.get("total")}), quits (exit {code})',
+          code == 0 and rs and rs[0]['done'] == 625 and steps(prog, 'cancelled') and not steps(prog, 'done') and pf.get('complete') is False and 1000 <= pf.get('done', 0) < 2401
+          and not os.path.exists(res[0]['launch']['maintenance']['cancelFile']), f'{tail(prog)} {pf}')
+    stopped = pf.get('done')
+    code, prog, log = run_maint(f'{kind}-mt-resume', res[0], ver, mcv, gamedir)
+    pf = json.load(open(pfp)); rs = steps(prog, 'resume')
+    check(f'maintenance {kind}: next run continues at {stopped} and finishes 2401 (exit {code})', code == 0 and rs and rs[0]['done'] == stopped and steps(prog, 'done')
+          and pf.get('complete') is True and pf.get('done') == 2401, f'{tail(prog)} {pf}')
+    # 3. an old save (1.12.2): the game's own upgrader first
+    if os.path.isfile(f'{OLD_WORLD}/level.dat'):
+        w2 = 'amber-mt-old'; prep(w2, OLD_WORLD)
+        code, out, err = bake('bake-instance', dict(req, maintenance={'world': w2})); res = [x for x in out if x['type'] == 'result']
+        M = res[0]['launch']['maintenance'] if res else {}
+        check(f'maintenance {kind}: 1.12.2 save -> upgrade needed (world data version 1343)', code == 0 and M.get('upgrade') == 'needed' and M.get('worldDataVersion') == 1343, f'{code} {M} {out[-1:]}')
+        if res:
+            t = time.time(); code, prog, log = run_maint(f'{kind}-mt-upgrade', res[0], ver, mcv, gamedir)
+            up = steps(prog, 'upgrade'); dv = level_dv(f'{saves}/{w2}/level.dat')
+            check(f'maintenance {kind}: the game own upgrader ran, then spawn, done, quit ({time.time() - t:.0f} s, exit {code}); level.dat data version now {dv}',
+                  code == 0 and up and up[-1].get('message') == 'upgraded' and steps(prog, 'spawn') and steps(prog, 'done') and dv == game_dv, f'{tail(prog)} see {T}/{kind}-mt-upgrade.log')
+    else: check(f'maintenance {kind}: old save for the upgrade test ({OLD_WORLD}; run tools/bake_1122_test.py once)', False)
+    # 4. refusals (bake only)
+    import gzip, struct
+    newer = 'amber-mt-newer'; os.makedirs(f'{saves}/{newer}', exist_ok=True)
+    with gzip.open(f'{saves}/{newer}/level.dat', 'wb') as f: f.write(b'\x0a\x00\x00' + b'\x0a\x00\x04Data' + b'\x03\x00\x0bDataVersion' + struct.pack('>i', 99999) + b'\x00\x00')
+    for m, extra, what in [({'world': w}, {'quickPlay': {'singleplayer': w}}, 'with quickPlay'), ({'world': w, 'pregenRadius': -1}, {}, 'radius -1'),
+                           ({'world': w, 'pregenRadius': 1.5}, {}, 'radius 1.5'), ({'world': w, 'pregenRadius': 100000}, {}, 'radius too big'),
+                           ({'world': w, 'eula': True}, {}, 'unknown key'), ({'world': 'no-such-world'}, {}, 'missing world'), ({'world': '..'}, {}, 'path outside saves/'),
+                           ({'world': newer}, {}, 'world from a newer game'), ({'world': w, 'upgrade': 'yes'}, {}, 'upgrade not a bool')]:
+        code, out, err = bake('bake-instance', dict(req, maintenance=m, **extra))
+        check(f'maintenance {kind} refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'aintenance' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+    shutil.rmtree(f'{saves}/{newer}', ignore_errors=True)
 
 def tree(root):
     out = {}
@@ -320,7 +448,7 @@ def sandbox():
     code, out, err = bake('warm', {'schema': 'amber-ul/warm-request@1', 'stateFile': sf})
     check('sandbox: warm afterwards rebuilds the jar in the shared cache', code == 0 and os.path.exists(baked[0]), f'{code} {err[-300:]}')
 
-what = next((a for a in sys.argv[1:] if not a.startswith('--') and a != 'quickplay'), 'all')
+what = next((a for a in sys.argv[1:] if not a.startswith('--') and a not in ('quickplay', 'maintenance')), 'all')
 if what in ('vanilla', 'all'): vanilla()
 if what in ('forge', 'all'): forge()
 if what in ('sandbox', 'all'): sandbox()

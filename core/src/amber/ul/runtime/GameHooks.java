@@ -28,6 +28,7 @@ public final class GameHooks {
     public static synchronized void titleScreen() {
         if (titleSeen) return;
         titleSeen = true; mark("TitleScreen.init"); listener.accept(Event.TITLE_SCREEN);
+        if (MaintenanceRun.requested()) MaintenanceRun.start(gameInstance);   // v1.3.3 maintenance mode
     }
     /** v1.3.3 quick play: the title screen is skipped; QuickPlay.join*World is the same moment (first reload done). */
     public static synchronized void quickPlay() {
