@@ -42,7 +42,9 @@ final class Maintenance {
         JsonObject o = q.getAsJsonObject("maintenance");
         for (String k : o.keySet()) if (!KEYS.contains(k)) throw new Bake.BadRequest("maintenance: unknown key '" + k + "'");
         if (!o.has("world")) throw new Bake.BadRequest("maintenance needs world");
-        String w = o.get("world").getAsString();
+        JsonElement we = o.get("world");
+        if (!we.isJsonPrimitive() || !we.getAsJsonPrimitive().isString()) throw new Bake.BadRequest("maintenance world must be a string");
+        String w = we.getAsString();
         try { QuickPlay.worldName(w); } catch (Bake.BadRequest e) { throw new Bake.BadRequest("maintenance world must be a folder name under saves/ (got '" + w + "')"); }
         boolean up = true;
         if (o.has("upgrade")) { JsonElement u = o.get("upgrade"); if (!u.isJsonPrimitive() || !u.getAsJsonPrimitive().isBoolean()) throw new Bake.BadRequest("maintenance upgrade must be true or false"); up = u.getAsBoolean(); }
@@ -53,13 +55,15 @@ final class Maintenance {
                 throw new Bake.BadRequest("maintenance pregenRadius must be a whole number of chunks, 0-" + MAX_RADIUS);
             r = e.getAsInt();
         }
-        Path gameDir = Path.of(q.has("gameDir") ? q.get("gameDir").getAsString() : Bake.str(q, "instanceDir"));
-        Path dir = gameDir.resolve("saves").resolve(w), dat = dir.resolve("level.dat");
+        Path dir, dat;   // the saves folder of the --gameDir the game will run with (QuickPlay.gameDir)
+        try { dir = QuickPlay.gameDir(q).resolve("saves").resolve(w); dat = dir.resolve("level.dat"); }
+        catch (java.nio.file.InvalidPathException e) { throw new Bake.BadRequest("maintenance world '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
         if (!Files.isRegularFile(dat)) throw new Bake.BadRequest("maintenance world '" + w + "' not found: no level.dat in " + dir);
         int dv;
         try { dv = LevelDat.dataVersion(dat); } catch (Exception e) { throw new Bake.BadRequest("maintenance world '" + w + "': level.dat cannot be read (" + e.getMessage() + ")"); }
         int game = LevelDat.gameDataVersion(mc);
         if (game > 0 && dv > game) throw new Bake.BadRequest("maintenance world '" + w + "' was saved by a newer game (data version " + dv + ", Minecraft " + mc + " is " + game + "); the game cannot open it");
+        QuickPlay.nameWarnings(w, mc.equals("1.12.2"));
         return new Maintenance(w, mc, up, r, dv, dir, Path.of(Bake.str(q, "instanceDir")).resolve(".amber-ul").resolve(CANCEL_FILE));
     }
 
@@ -72,7 +76,7 @@ final class Maintenance {
 
     /** The system properties the runtime side reads (core: runtime.MaintenanceRun; forge-1.12.2: core-legacy). */
     void jvmArgs(JsonArray jvm) {
-        jvm.add("-Damber.ul.maintenance=" + world);
+        jvm.add("-Damber.ul.maintenance=" + QuickPlay.encode(world));   // percent-encoded UTF-8: an ASCII argument whatever the code page
         jvm.add("-Damber.ul.maintenance.upgrade=" + upgrade);
         jvm.add("-Damber.ul.maintenance.radius=" + radius);
         jvm.add("-Damber.ul.maintenance.spawnRadius=" + SPAWN_RADIUS);

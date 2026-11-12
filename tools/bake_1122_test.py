@@ -238,7 +238,7 @@ if '--no-launch' not in sys.argv:
     def tail(pr): return [(x['step'], x['done'], x['total']) for x in pr[-5:]]
     MW = 'amber-mt'; MWD = os.path.join(GAME, 'saves', MW)
     if os.path.isfile(os.path.join(GAME, 'saves', 'amber-worldtest', 'level.dat')):
-        shutil.rmtree(MWD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        shutil.rmtree(MWD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json')); set_level_name(os.path.join(MWD, 'level.dat'), 'Maintenance Test Name')
         cfg = os.path.join(GAME, 'config'); cfg_keep = os.path.join(T, 'config-before-maintenance'); shutil.rmtree(cfg_keep, ignore_errors=True); shutil.copytree(cfg, cfg_keep)
         eula_before = os.path.exists(os.path.join(GAME, 'eula.txt'))
         code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 12}))
@@ -252,7 +252,8 @@ if '--no-launch' not in sys.argv:
             latest_ = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
             check(f'maintenance (1.12.2): spawn 289, pregen 625, done, the game quit by itself ({time.time() - t0:.0f} s, {m})', m.get('exit') == 0 and 'failed' not in m
                   and sp and sp[-1]['done'] == 289 and pg and pg[-1]['done'] == pg[-1]['total'] == 625 and steps(pr, 'done') and steps(pr, 'quit') and pf.get('complete') is True
-                  and 'maintenance: main menu up' in latest_ and 'passive (not opening a world)' in latest_, f'{tail(pr)} {pf} see {T}/maintenance.log')
+                  and 'maintenance: main menu up' in latest_ and 'passive (not opening a world)' in latest_ and level_name(os.path.join(MWD, 'level.dat')) == 'Maintenance Test Name',
+                  f'{tail(pr)} {pf} LevelName {level_name(os.path.join(MWD, "level.dat"))!r} see {T}/maintenance.log')
             check('maintenance (1.12.2): progress lines are JSON with schema/world; eula.txt untouched', pr and all(x.get('schema') == 'amber-ul/maintenance-progress@1' and x.get('world') == MW for x in pr)
                   and os.path.exists(os.path.join(GAME, 'eula.txt')) == eula_before, pr[:2])
             code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 20}))

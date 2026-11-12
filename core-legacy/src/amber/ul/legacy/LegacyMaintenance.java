@@ -19,7 +19,8 @@ import java.util.regex.Pattern;
 /**
  * Interface v1.3.3 maintenance mode on Forge 1.12.2 (core-legacy, Java 8): with {@code -Damber.ul.maintenance=<world>}
  * a daemon thread waits for FML to finish and the main menu to be up (as {@link LegacyQuickPlay}), opens the world in
- * the integrated server (launchIntegratedServer, as the world list does; the game converts older saves itself while
+ * the integrated server exactly as the world list does (LegacyQuickPlay.openWorld: FMLClientHandler.tryLoadExistingWorld with
+ * the world's WorldSummary, so it keeps its display name and FML asks its own questions; the game converts older saves itself while
  * loading them), loads the overworld chunks in a square spiral around the world spawn through the server's
  * ChunkProviderServer.provideChunk on the server thread (the spawn area always, then -Damber.ul.maintenance.radius),
  * then leaves the world as "Save and Quit to Title" does and shuts the game down. Same progress lines, progress file
@@ -29,7 +30,8 @@ public final class LegacyMaintenance {
     private LegacyMaintenance() {}
     static final String PROPERTY = "amber.ul.maintenance", PREFIX = "@amber-ul/progress ", PROGRESS_FILE = "amber-ul-pregen.json";
 
-    static void start(final String world) {
+    static void start(final String encoded) {
+        final String world = LegacyQuickPlay.decode(encoded);
         Thread t = new Thread("amber-ul maintenance") {
             @Override public void run() {
                 Job j = new Job(world);
@@ -65,8 +67,7 @@ public final class LegacyMaintenance {
             if (!new File(dir, "level.dat").isFile()) throw new IllegalStateException("no level.dat in " + dir);
             progress("start", 0, 0, world, null);
             progress("open", 0, 1, world, null);
-            final Method launch = mcCls.getMethod("func_71371_a", String.class, String.class, Class.forName("net.minecraft.world.WorldSettings", false, mcCls.getClassLoader()));
-            onClient(new Callable<Object>() { public Object call() throws Exception { launch.invoke(mc, world, world, null); return null; } });   // launchIntegratedServer
+            onClient(new Callable<Object>() { public Object call() throws Exception { LegacyQuickPlay.openWorld(mc, mcCls, world); return null; } });
             Object server = waitForServer();
             boolean complete = pregen(server, dir);
             progress(complete ? "done" : "cancelled", 0, 0, world, complete ? null : "pregen stopped; the next maintenance run continues from here");

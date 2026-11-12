@@ -30,6 +30,18 @@ public final class MaintenanceRun {
     static final String PROGRESS_FILE = "amber-ul-pregen.json";
     private static volatile boolean started;
 
+    /** The bake percent-encodes the world folder (UTF-8). */
+    static String world() {
+        String s = System.getProperty("amber.ul.maintenance", "");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '%' && i + 2 < s.length() && Character.digit(s.charAt(i + 1), 16) >= 0 && Character.digit(s.charAt(i + 2), 16) >= 0) { out.write(Integer.parseInt(s.substring(i + 1, i + 3), 16)); i += 2; }
+            else out.writeBytes(String.valueOf(c).getBytes(StandardCharsets.UTF_8));
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
     public static boolean requested() { String w = System.getProperty("amber.ul.maintenance"); return w != null && !w.isEmpty(); }
 
     /** From the title screen hook (client thread): the work runs on its own thread and hands steps to the client / server threads. */
@@ -37,7 +49,7 @@ public final class MaintenanceRun {
         if (started || minecraft == null) return;
         started = true;
         Thread t = new Thread(() -> {
-            String world = System.getProperty("amber.ul.maintenance");
+            String world = world();
             try { new Job(minecraft, world).run(); }
             catch (Throwable e) {
                 Throwable c = e instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : e;
