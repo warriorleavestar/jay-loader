@@ -171,18 +171,16 @@ public final class LegacyMaintenance {
             Files.move(tmp.toPath(), pf.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         }
 
-        /** As GuiIngameMenu's "Save and Quit to Title": the integrated server saves and stops; then the game shuts down. */
+        /**
+         * As closing the game window while in a world: Minecraft.shutdown() ends the game loop, and shutdownMinecraftApplet
+         * then calls loadWorld(null), so the integrated server saves everything and stops before the JVM exits. (Not
+         * GuiIngameMenu's sendQuittingDisconnectingPacket + loadWorld(null) from here: the server may see the disconnect and
+         * start stopping by itself first, and loadWorld's initiateShutdown then waits forever for a task it never runs.)
+         */
         void quit() throws Throwable {
             progress("quit", 0, 0, world, null);
             if (mc == null) return;
             onClient(new Callable<Object>() { public Object call() throws Exception {
-                Object w = field(mc, "field_71441_e");
-                if (w != null) {
-                    call0(w, "func_72882_A");                                                  // sendQuittingDisconnectingPacket
-                    Method load = null;
-                    for (Method m : mcCls.getMethods()) if (m.getName().equals("func_71403_a") && m.getParameterCount() == 1) load = m;
-                    load.invoke(mc, new Object[] { null });                                    // loadWorld(null)
-                }
                 mcCls.getMethod("func_71400_g").invoke(mc);                                     // shutdown
                 return null;
             } });
