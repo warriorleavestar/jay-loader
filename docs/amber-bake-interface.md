@@ -110,18 +110,19 @@ Jay plans to run the game in a sandbox that can write only the instance director
   - `{"type":"error","code":"…","message":"…"}`
 - Exit codes: 0 success; 2 dependency problems (the problem lines give the reasons); 1 any other failure.
 - Every write goes to a temp file first and is then renamed atomically, so a killed process never leaves a corrupt cache.
-- `amber.ul.Bake version` prints:
+- `amber.ul.Bake version` prints (the 0.4.0 package, verbatim):
   ```
-  {"loaderVersion":"0.4.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
-   "supportedMc":["1.20.1","1.21.1"],
-   "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"]},
+  {"type":"result","schema":"amber-ul/version-result@1","loaderVersion":"0.4.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3","interfaceRevision":"1.3.2",
+   "supportedMc":["1.12.2","1.20.1","1.21.1"],
+   "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"],"forge-1.12.2":["1.12.2"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
-   "libs":{"asm":"9.10.1","sponge-mixin":"0.17.5+mixin.0.8.7","mixinextras-fabric":"0.5.5","tiny-remapper":"0.10.4",…},
-   "javaMin":{"vanilla":21,"neoforge":21,"forge":21},"javaRuntime":21,
-   "interfaceRevision":"1.3.1",
+   "libs":{"antlr4-runtime":"4.11.1","tomlj":"1.1.1","access-widener":"2.1.0","asm":"9.10.1","asm-analysis":"9.10.1","asm-commons":"9.10.1","asm-tree":"9.10.1","asm-util":"9.10.1","intermediary":"1.21.1-v2","mapping-io":"0.6.1","mixinextras-fabric":"0.5.5","sponge-mixin":"0.17.5+mixin.0.8.7","tiny-remapper":"0.10.4","xz":"1.9","gson":"2.10.1"},
+   "javaMin":{"vanilla":21,"neoforge":21,"forge":21,"forge-1.12.2":21},"javaRuntime":21,
    "accepts":[{"platform":"vanilla","mc":"1.21.1","available":true,"accepts":["fabric","quilt"],"missingBridges":[]},
               {"platform":"neoforge","mc":"1.21.1","available":true,"accepts":["neoforge","fabric","quilt","forge"],"missingBridges":[]},
-              {"platform":"forge","mc":"1.20.1","available":true,"accepts":["forge","neoforge","fabric","quilt"],"missingBridges":[]}]}
+              {"platform":"forge","mc":"1.20.1","available":true,"accepts":["forge","neoforge","fabric","quilt"],"missingBridges":[]},
+              {"platform":"forge-1.12.2","mc":"1.12.2","available":true,"accepts":["forge"],"missingBridges":[]}],
+   "javaLaunch":{"forge-1.12.2":{"min":8,"max":8}}}
   ```
   `accepts` (v1.3.1) is what this build loads per platform, from the bridges present: use it to decide which mods to offer for an instance.
   When `protocol` changes, Amber should treat old caches as invalid. `interface` changes on additive revisions only.
@@ -217,7 +218,8 @@ amber-ul-0.4.0/
   loader.jar          the loader
   libs/*.jar          its libraries (unmodified official jars; manifest.libs gives Maven coordinates + url)
   bridges/            fmlbridge.jar, fabricbridge.jar (NeoForge 1.21.1), fmlbridge-forge.jar, fabricbridge-forge.jar
-                      (Forge 1.20.1), forgecompat.jar (Forge 1.21.1 mods on NeoForge)
+                      (Forge 1.20.1), forgecompat.jar (Forge 1.21.1 mods on NeoForge),
+                      fmlbridge-1.12.2.jar (Forge 1.12.2: the core-legacy runtime and transformer cache, Java 8 bytecode)
   manifest.json
 ```
 
