@@ -17,7 +17,7 @@ import java.util.*;
  * Exit: 0 ok, 2 dependency problems, 1 anything else. Every file is written to a temp name and renamed atomically.
  */
 public final class Bake {
-    public static final String LOADER_VERSION = "0.3.2", PROTOCOL = "1";
+    public static final String LOADER_VERSION = "0.4.0", PROTOCOL = "1";
     /** Interface revision (docs/amber-bake-interface.md). 1.1 added optional fields, 1.2 the warm and gc stages, 1.3 javaMin,
      *  generated loader libraries, the packaged layout, the rebuilt/reused report and runtime problem files; protocol (cache layout) unchanged. */
     public static final String INTERFACE = "1.3";
