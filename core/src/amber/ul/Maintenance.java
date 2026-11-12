@@ -38,7 +38,7 @@ final class Maintenance {
         if (!q.has("maintenance") || q.get("maintenance").isJsonNull()) return null;
         if (!q.get("maintenance").isJsonObject()) throw new Bake.BadRequest("maintenance must be an object: {\"world\": folder, \"upgrade\"?: bool, \"pregenRadius\"?: chunks}");
         if (q.has("quickPlay") && !q.get("quickPlay").isJsonNull()) throw new Bake.BadRequest("maintenance and quickPlay cannot be combined");
-        if (q.has("side") && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("maintenance runs in the game client's integrated server: side must be client");
+        if (q.has("side") && !q.get("side").isJsonNull() && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("maintenance runs in the game client's integrated server: side must be client");
         JsonObject o = q.getAsJsonObject("maintenance");
         for (String k : o.keySet()) if (!KEYS.contains(k)) throw new Bake.BadRequest("maintenance: unknown key '" + k + "'");
         if (!o.has("world")) throw new Bake.BadRequest("maintenance needs world");
@@ -62,7 +62,12 @@ final class Maintenance {
         int game = LevelDat.gameDataVersion(mc);
         if (game > 0 && dv > game) throw new Bake.BadRequest("maintenance world '" + w + "' was saved by a newer game (data version " + dv + ", Minecraft " + mc + " is " + game + "); the game cannot open it");
         QuickPlay.nameWarnings(w, mc.equals("1.12.2"));
-        return new Maintenance(w, mc, up, r, dv, dir, Path.of(Bake.str(q, "instanceDir")).resolve(".amber-ul").resolve(CANCEL_FILE));
+        JsonElement inst = q.get("instanceDir");   // the cancel file lives in the instance, next to the bake's state
+        if (inst == null || !inst.isJsonPrimitive() || !inst.getAsJsonPrimitive().isString()) throw new Bake.BadRequest("maintenance needs instanceDir (a string): the cancel file is <instanceDir>/.amber-ul/" + CANCEL_FILE);
+        Path cancel;
+        try { cancel = Path.of(inst.getAsString()).toAbsolutePath().resolve(".amber-ul").resolve(CANCEL_FILE); }
+        catch (InvalidPathException e) { throw new Bake.BadRequest("instanceDir '" + inst.getAsString() + "' is not a usable path: " + e.getMessage()); }
+        return new Maintenance(w, mc, up, r, dv, dir.toAbsolutePath(), cancel);
     }
 
     /** "needed" / "not needed" (same version) / "off" (asked not to) / "game" (1.12.2: the game upgrades on load). */
@@ -78,7 +83,8 @@ final class Maintenance {
         jvm.add("-Damber.ul.maintenance.upgrade=" + upgrade);
         jvm.add("-Damber.ul.maintenance.radius=" + radius);
         jvm.add("-Damber.ul.maintenance.spawnRadius=" + SPAWN_RADIUS);
-        jvm.add("-Damber.ul.maintenance.cancelFile=" + cancelFile);
+        jvm.add("-Damber.ul.maintenance.cancelFile=" + QuickPlay.encode(cancelFile.toString()));   // paths percent-encoded too (an instance under C:\Users\张三)
+        jvm.add("-Damber.ul.maintenance.worldDir=" + QuickPlay.encode(worldDir.toString()));     // the runtime checks the game's own saves folder is this one
         jvm.add("-Damber.ul.maintenance.gameDataVersion=" + LevelDat.gameDataVersion(mc));
     }
 
