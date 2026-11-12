@@ -45,6 +45,8 @@ public final class LegacyLaunch {
             LegacyProblems.report("error", "legacy_launchwrapper_missing", m);
             System.err.println("[amber-ul legacy] " + m); System.exit(3); return;
         }
+        String quick = System.getProperty(LegacyQuickPlay.PROPERTY);
+        if (quick != null && !quick.isEmpty()) LegacyQuickPlay.start(quick);   // v1.3.3: open this world once the main menu is up
         try { run(launch, args); }
         catch (Throwable t) {
             Throwable root = t; while (root.getCause() != null && root.getCause() != root) root = root.getCause();

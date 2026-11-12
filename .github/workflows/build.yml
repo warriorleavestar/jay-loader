@@ -39,7 +39,7 @@ jobs:
         run: |
           D=$(python -I -c "import json; print(json.load(open('package.json'))['dir'])")
           cd "$D" && java -cp "$(python -I -c "import json; print(';'.join(json.load(open('manifest.json'))['classpath']))")" amber.ul.Bake version
-      - name: Core-only package claims no bridged ecosystems (accepts, interface revision 1.3.2)
+      - name: Core-only package claims no bridged ecosystems (accepts, interface revision 1.3.3)
         run: |
           python -I - <<'EOF'
           import json
@@ -47,7 +47,7 @@ jobs:
           acc = {(p['platform'], p['mc']): (p['available'], p['accepts']) for p in m['accepts']}
           want = {('vanilla', '1.21.1'): (True, ['fabric', 'quilt']), ('neoforge', '1.21.1'): (False, []), ('forge', '1.20.1'): (False, []),
                   ('forge-1.12.2', '1.12.2'): (False, [])}   # no fmlbridge-1.12.2.jar in a core-only package
-          assert m['interfaceRevision'] == '1.3.2' and acc == want, (m['interfaceRevision'], acc)
+          assert m['interfaceRevision'] == '1.3.3' and acc == want, (m['interfaceRevision'], acc)
           assert m['javaLaunch'] == {'forge-1.12.2': {'min': 8, 'max': 8}}, m['javaLaunch']
           print('accepts ok', acc)
           EOF

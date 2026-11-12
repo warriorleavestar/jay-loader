@@ -1,6 +1,6 @@
 # Interface between the universal loader and Amber's bake framework (v1.3.1)
 
-v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; **v1.3.2 2026-11-12**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
+v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; v1.3.2 2026-11-12; **v1.3.3 2026-11-12**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
 
 ## Bake-time mixin pass (NeoForge platform, 2026-11-11)
 
@@ -274,3 +274,32 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - Problem codes: dependency errors use `missing_dep` on every platform (Amber should still accept the older `missing_dependency`); `bad_platform` (error) means `platform.installDir` is not a usable Forge 1.12.2 install (no `version.json`, not a LaunchWrapper profile, listed libraries missing).
 - Runtime problems: the launch block passes `-Damber.ul.problemsFile` (also `launch.problemsFile`) and `-Damber.ul.loaderVersion`; `LegacyLaunch` writes the usual launch line and `@amber-ul/problem` lines for what fails before the game takes over: `legacy_java_unsupported` (error; `javaVersion`, `required`), `legacy_launchwrapper_missing` (error), `legacy_launch_failed` (error; `exception`, `rootCause`?, `log`; when LaunchWrapper itself caught the failure the cause is only in `logs/latest.log`), `legacy_cache_disabled` (warning; `cacheDir`; the launch goes on without the cache). Later failures are FML's own crash reports. Java 8 writes stdout in the platform code page, so `@amber-ul/problem` lines (and the problems file) are pure ASCII: anything outside 0x20-0x7E is a JSON `\uXXXX` escape.
 - Package: `manifest.json` carries `javaLaunch`; `bridges/fmlbridge-1.12.2.jar` is the core-legacy runtime, Java 8 bytecode throughout (checked when packaging).
+
+## v1.3.3: quick play (additive)
+
+`version` reports `"interfaceRevision":"1.3.3"`. A launcher that does not send the new field gets exactly the v1.3.2 behaviour.
+
+- `bake-instance` takes an optional `quickPlay`, exactly one of:
+  ```
+  "quickPlay": {"singleplayer": "<world folder>"}
+  "quickPlay": {"multiplayer": "<host>[:<port>]"}
+  ```
+  - `singleplayer`: the folder name under `<gameDir>/saves/` (`gameDir` from the request, else `instanceDir`). One path segment: no `/`, `\`, `:` or control characters, and not `.` or `..`. The world must already exist (`level.dat`); the bake only reads it and never creates a world.
+  - `multiplayer`: a host name or IPv4 address with an optional `:port` (1-65535, default 25565), or `[IPv6]:port`.
+  - Anything else (both keys, neither, an extra key, a missing world, a bad port, a bare IPv6 address) is `{"type":"error","code":"bad_request"}`, exit 1, before anything is baked.
+  - `quickPlay` is not part of `stateKey`: a bake that only changes it reuses every cached file.
+- The launch block then carries `quickPlay` (echo, for the UI) and the arguments that do it:
+  ```
+  "launch": {..., "quickPlay": {"singleplayer": "<world folder>", "via": "game" | "amber-ul"}, ...}
+  "launch": {..., "quickPlay": {"multiplayer": "<host>:<port>", "via": "game"}, ...}
+  ```
+  `via: "game"` = the game's own quick play arguments; `via: "amber-ul"` = the loader does it (Forge 1.12.2 singleplayer). Launch exactly as before (`jvmArgs`, `classpath`, `mainClass`, `gameArgsPrefix` then the launcher's own game arguments); there is nothing extra to append.
+
+  | platform | singleplayer | multiplayer |
+  |---|---|---|
+  | vanilla / NeoForge 1.21.1, Forge 1.20.1 | `gameArgsPrefix` ends with `--quickPlaySingleplayer <world>` | `gameArgsPrefix` ends with `--quickPlayMultiplayer <host>:<port>` |
+  | forge-1.12.2 | `jvmArgs` has `-Damber.ul.legacy.quickPlay=<world>`; `gameArgsPrefix` stays `[]` | `gameArgsPrefix` is `["--server", host, "--port", port]` |
+
+- On 1.20.1 / 1.21.1 the title screen is never shown. The loader's "title screen reached" moment (class cache save, `fabric_init_not_run` check) fires when the game's quick play starts the join (`QuickPlay.joinSingleplayerWorld` / `joinMultiplayerWorld`, after the first resource reload). If the world or server cannot be reached the game shows its own error screen and returns to the menu.
+- On Forge 1.12.2 singleplayer, core-legacy waits until FML has finished loading and the main menu is up. That is vanilla's `GuiMainMenu`, a subclass, or a replacement such as CustomMainMenu's (RLCraft). It then opens the world on the client thread, with the same call the world list uses. FML's own questions (missing mods, an old save) still appear. If the menu never comes up (default wait 30 minutes, `-Damber.ul.legacy.quickPlayWaitMs`) or the world fails to open, the game stays on the menu and core-legacy reports `legacy_quickplay_failed` as a runtime problem (warning or error; `world`).
+- Everything runs inside the normal game client (its integrated server for singleplayer). Nothing is written by the bake; the game writes only its own files in `gameDir`.

@@ -30,6 +30,10 @@ public class WorldTest {
             Object mc = mcCls.getMethod("func_71410_x").invoke(null);                       // getMinecraft()
             Object screen = field(mcCls, "field_71462_r").get(mc);                          // currentScreen
             Object player = field(mcCls, "field_71439_g").get(mc);                          // player
+            // -Damber.worldtest.open=false: only report (quick play tests: the loader opens the world, nothing clicks the menu)
+            if (!started && screen != null && titleScreen(screen) && "false".equals(System.getProperty("amber.worldtest.open"))) {
+                started = true; System.out.println("AMBER-WORLDTEST title screen, passive (not opening a world)");
+            }
             if (!started && screen != null && titleScreen(screen)) {
                 started = true;
                 System.out.println("AMBER-WORLDTEST title screen, opening world");
@@ -41,13 +45,21 @@ public class WorldTest {
                 Method launch = mcCls.getMethod("func_71371_a", String.class, String.class, ws); // launchIntegratedServer
                 launch.invoke(mc, "amber-worldtest", "amber-worldtest", settings);
             }
-            if (player != null && inWorldAt < 0 && (screen == null || !loadingScreen(screen))) { inWorldAt = System.currentTimeMillis(); System.out.println("AMBER-WORLDTEST in world"); }
+            if (player != null && inWorldAt < 0 && (screen == null || !loadingScreen(screen))) { inWorldAt = System.currentTimeMillis(); System.out.println("AMBER-WORLDTEST in world " + worldName(mc)); }
             if (inWorldAt > 0 && !reported && System.currentTimeMillis() - inWorldAt > 60_000) {
                 reported = true; System.out.println("AMBER-WORLDTEST in world 60 s, player alive=" + (player != null));
             }
         } catch (Throwable t) {
             if (!reported) { reported = true; System.out.println("AMBER-WORLDTEST failed: " + t); t.printStackTrace(System.out); }
         }
+    }
+
+    /** The integrated server's world folder (getIntegratedServer().getFolderName()), for the quick play test. */
+    private static String worldName(Object mc) {
+        try {
+            Object srv = mc.getClass().getMethod("func_71401_C").invoke(mc);
+            return srv == null ? "?" : "folder=" + srv.getClass().getMethod("func_71270_I").invoke(srv);
+        } catch (Throwable t) { return "?"; }
     }
 
     /** Screens shown while a world loads (anything else, e.g. the game-over screen, still means the player is in the world). */

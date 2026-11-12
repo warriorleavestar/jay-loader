@@ -97,14 +97,15 @@ check('launch block: cache on by default, FML jar self-check kept (no fml.ignore
       and not any(a.startswith('-Dfml.ignore') for a in L['jvmArgs']), L['jvmArgs'])
 DEBUG = ['-Damber.ul.legacy.cacheDebug=true']   # stats.txt (and env-<key>.txt) next to the cache, for these checks only
 
-def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None):
+def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None, keep_world=False):
     L_ = block or L
     nat = os.path.join(T, 'natives'); shutil.rmtree(nat, ignore_errors=True); os.makedirs(nat)
     for jar, excl in natives:
         with zipfile.ZipFile(jar) as z:
             for n in z.namelist():
                 if not (n.endswith('/') or any(n.startswith(e) for e in excl) or '/' in n): open(os.path.join(nat, n), 'wb').write(z.read(n))
-    shutil.rmtree(os.path.join(GAME, 'saves', 'amber-worldtest'), ignore_errors=True); shutil.rmtree(os.path.join(GAME, 'logs'), ignore_errors=True)
+    if not keep_world: shutil.rmtree(os.path.join(GAME, 'saves', 'amber-worldtest'), ignore_errors=True)
+    shutil.rmtree(os.path.join(GAME, 'logs'), ignore_errors=True)
     game = ['--username', 'AmberTest', '--version', '1.12.2-forge', '--gameDir', GAME, '--assetsDir', os.path.join(B, 'assets'), '--assetIndex', '1.12',
             '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--width', '960', '--height', '540']
     cmd = [JAVA8, '-Xmx3G', '-Djava.library.path=' + nat] + list(extra) + L_['jvmArgs'] + ['-cp', os.pathsep.join(classpath or L_['classpath']), L_['mainClass']] + L_['gameArgsPrefix'] + game
@@ -147,7 +148,7 @@ if '--no-launch' not in sys.argv:
     check(f'warm launch: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/warm.log')
     check(f'warm launch hit the cache (hits {s.get("hits")}, misses {s.get("misses")})', int(s.get('hits', 0)) > 1000 and int(s.get('hits', 0)) > 10 * int(s.get('misses', 1)), {k: v for k, v in s.items() if k != '_log'})
     stats_mtime = os.path.getmtime(os.path.join(tc, 'stats.txt'))
-    m, s = launch('after-edit', stop='title')   # no cacheDebug: no stats thread after loading
+    m, s = launch('after-edit', stop='title', keep_world=True)   # no cacheDebug: no stats thread after loading
     check(f'config changed after loading -> new cache key on the next start ({warm_file} -> {s["_file"]}, {s["_loaded"]} cached classes)',
           'title' in m and s['_file'] and s['_file'] != warm_file and s['_loaded'] == 0, {k: v for k, v in s.items() if k != '_log'})
     check('without cacheDebug no stats.txt is written', os.path.getmtime(os.path.join(tc, 'stats.txt')) == stats_mtime)
@@ -161,11 +162,11 @@ if '--no-launch' not in sys.argv:
     check('transformerCache:false -> launch.cache.enabled false, no cache property', code == 0 and L2 and L2['cache'].get('enabled') is False
           and not any(a.startswith('-Damber.ul.legacy.cache=') for a in L2['jvmArgs']), L2 and L2['cache'])
     if L2:
-        m, s = launch('cache-off', stop='title', block=L2)
+        m, s = launch('cache-off', stop='title', block=L2, keep_world=True)
         check(f'cache off: stock LaunchWrapper reaches the title screen {m}', 'title' in m and 'failed' not in m and s['_file'] is None, f'see {T}/cache-off.log')
     blocker = os.path.join(T, 'not-a-dir'); open(blocker, 'w').write('x')
     L3 = dict(L, jvmArgs=[('-Damber.ul.legacy.cache=' + os.path.join(blocker, 'cache')) if a.startswith('-Damber.ul.legacy.cache=') else a for a in L['jvmArgs']])
-    m, s = launch('cache-broken', stop='title', block=L3)
+    m, s = launch('cache-broken', stop='title', block=L3, keep_world=True)
     probs3 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
     check(f'cache dir unusable: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
           and '@amber-ul/problem {"type":"problem"' in s['_log'] and any(p.get('code') == 'legacy_cache_disabled' and p.get('severity') == 'warning' for p in probs3), probs3)
@@ -173,10 +174,23 @@ if '--no-launch' not in sys.argv:
     with zipfile.ZipFile(L['classpath'][0]) as zi, zipfile.ZipFile(nolw, 'w') as zo:
         for n in zi.namelist():
             if '/lw/' not in n: zo.writestr(n, zi.read(n))
-    m, s = launch('cache-missing', stop='title', classpath=[nolw] + L['classpath'][1:])
+    m, s = launch('cache-missing', stop='title', classpath=[nolw] + L['classpath'][1:], keep_world=True)
     probs4 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
     check(f'bridge without the cache part: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
           and any(p.get('code') == 'legacy_cache_disabled' for p in probs4), probs4)
+
+    # v1.3.3 quick play, singleplayer: the world the warm run made is opened by core-legacy as soon as the main menu is up;
+    # the world test mod is passive (it never opens a world), and nothing clicks anything
+    code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-worldtest'}))
+    rq = next((x for x in out if x['type'] == 'result'), None); LQ = rq and rq['launch']
+    check('quickPlay singleplayer (1.12.2): launch.quickPlay via amber-ul, -Damber.ul.legacy.quickPlay', code == 0 and LQ and LQ.get('quickPlay') == {'singleplayer': 'amber-worldtest', 'via': 'amber-ul'}
+          and '-Damber.ul.legacy.quickPlay=amber-worldtest' in LQ['jvmArgs'] and LQ['gameArgsPrefix'] == [], f'{code} {LQ and LQ.get("quickPlay")} {out[-2:]}')
+    if LQ:
+        m, s = launch('quickplay', stop='world', block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+        log = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
+        check(f'quickPlay singleplayer (1.12.2): main menu up -> straight into the world, no menu interaction {m}', 'world' in m and 'failed' not in m
+              and 'passive (not opening a world)' in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-worldtest' in log,
+              f'see {T}/quickplay.log')
 
 # refusals
 code, out, err = bake('bake-instance', dict(REQ, mods=[{'path': m} for m in mods if 'mixinbooter' not in os.path.basename(m).lower()]))   # UniversalTweaks requires mixinbooter
@@ -215,6 +229,15 @@ check('version.json without the Forge library -> bad_platform', code != 0 and an
 shutil.rmtree(bad, ignore_errors=True)
 code, out, err = bake('bake-instance', dict(REQ, gameJar=os.path.join(R, 'legacytest', 'amber-worldtest-1122.jar')))
 check('gameJar that is not the 1.12.2 client -> bad_request', code != 0 and any(x.get('code') == 'bad_request' and 'sha1' in x.get('message', '') for x in out), f'{code} {out[-2:]}')
+# v1.3.3 quick play refusals and the multiplayer mapping (no server is started: only the launch block is checked)
+code, out, err = bake('bake-instance', dict(REQ, quickPlay={'multiplayer': 'play.example.org:25570'}))
+rq = next((x for x in out if x['type'] == 'result'), None)
+check('quickPlay multiplayer (1.12.2): the game own --server/--port', code == 0 and rq and rq['launch']['gameArgsPrefix'] == ['--server', 'play.example.org', '--port', '25570']
+      and rq['launch']['quickPlay'] == {'multiplayer': 'play.example.org:25570', 'via': 'game'} and not any('quickPlay' in a for a in rq['launch']['jvmArgs']), f'{code} {rq and rq["launch"]}')
+for qp, what in [({'singleplayer': 'no-such-world'}, 'missing world'), ({'singleplayer': '../outside'}, 'path outside saves/'), ({'singleplayer': 'a', 'multiplayer': 'b:1'}, 'both modes'),
+                 ({'multiplayer': 'host:0'}, 'port 0'), ({'multiplayer': '::1:25565'}, 'bare IPv6')]:
+    code, out, err = bake('bake-instance', dict(REQ, quickPlay=qp))
+    check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'quickPlay' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
 code, out, err = bake('bake-instance', REQ)   # back to the real install for the gc check
 
 # gc: the legacy state has no cacheFiles; an old cacheRoot/legacy-1.12.2 dir is managed
