@@ -16,6 +16,11 @@ echo "$LIBS" > build/loader-cp.txt
 python -I tools/loader_libs.py build/loader-cp.txt build/loader/amber-ul/loader-libs.json   # requirements + packaged manifest come from the real class path (interface v1.3)
 # hardening tests (security scan H13-H16): plain main, no framework; run with tools/jre21 java -cp "build/loader;build/test;$LIBS" amber.ul.HardeningTest
 rm -rf build/test && javac --release 21 -nowarn -encoding UTF-8 -d build/test -cp "build/loader;$LIBS" $(find core/test -name '*.java')
+# forge-1.12.2 (docs/forge-1.12.2-plan.md): the runtime side runs in the game's Java 8 JVM, so core-legacy is Java 8
+# bytecode (--release 8, class major 52) and depends on nothing but the JDK; the LaunchWrapper part (transformer cache)
+# compiles against Mojang's launchwrapper 1.12 (tools/fetch_1122.py) and is only built, and packaged as the bridge
+# fmlbridge-1.12.2.jar, when that jar is present. LaunchWrapper itself is never bundled.
+bash tools/build_legacy.sh
 # FML bridge: compiled against the real NeoForge/FML jars, runs inside the universal loader (only when the NeoForge platform is active)
 if [ -d $MC/neoforge/libraries ]; then
   NFLIBS="$(find $MC/neoforge/libraries -name '*.jar' | grep -v -- '-sources' | tr '\n' ';')$(find $MC/libraries -name 'slf4j-api*.jar' -o -name 'gson-*.jar' -o -name 'guava-*.jar' | tr '\n' ';')"

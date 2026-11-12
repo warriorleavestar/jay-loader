@@ -12,12 +12,13 @@ warm + gc (v1.1): warm on both states; gc dry runs and refusals on both caches; 
 import json, os, shutil, subprocess, sys, threading, time
 # the prototype root as the JVM sees it (tools/proto_root.py: ASCII path or its junction)
 R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proto_root.py')], capture_output=True, text=True, check=True).stdout.strip()
-MC = f'{R}/mc'; T = f'{MC}/bakecli'; JAVA = f'{R}/tools/jre21/bin/java.exe'
+MC = (os.environ.get('AMBER_UL_MC') or f'{R}/mc').replace(chr(92), '/'); T = f'{MC}/bakecli'; JAVA = os.environ.get('JAVA') or (f'{R}/tools/jre21/bin/java.exe' if os.path.isfile(f'{R}/tools/jre21/bin/java.exe') else shutil.which('java'))
 fails = []
 PKG = None
 # v1.3.1: what a full build (all five bridges) accepts, per (kind, mc)
 FULL_ACCEPTS = {('vanilla', '1.21.1'): (True, ['fabric', 'quilt']), ('neoforge', '1.21.1'): (True, ['neoforge', 'fabric', 'quilt', 'forge']),
-                ('forge', '1.20.1'): (True, ['forge', 'neoforge', 'fabric', 'quilt'])}
+                ('forge', '1.20.1'): (True, ['forge', 'neoforge', 'fabric', 'quilt']),
+                ('forge-1.12.2', '1.12.2'): (True, ['forge'])}   # v1.3.2 (docs/forge-1.12.2-plan.md)
 def accepts_of(a): return {(p['platform'], p['mc']): (p['available'], p['accepts']) for p in (a or [])}
 if '--package' in sys.argv:
     out = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'package.py')], capture_output=True, text=True)
@@ -30,9 +31,10 @@ if '--package' in sys.argv:
     on_disk = sorted(os.path.relpath(os.path.join(d, f), PKG).replace('\\', '/') for d, _, fs in os.walk(PKG) for f in fs if f != 'manifest.json')
     print(('OK   ' if not bad and on_disk == sorted(MAN['files']) else 'FAIL ') + f'package {PKG}: manifest sha256 of {len(MAN["files"])} files, nothing unlisted', flush=True)
     if bad or on_disk != sorted(MAN['files']): fails.append('package manifest')
-    ok = all(os.path.exists(f'{PKG}/bridges/{b}') for b in ('fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar')) and MAN['javaMin'] == {'vanilla': 21, 'neoforge': 21, 'forge': 21}
-    print(('OK   ' if ok else 'FAIL ') + 'package: all bridge jars under bridges/, javaMin 21 per platform', flush=True)
-    ok = MAN.get('interfaceRevision') == '1.3.1' and accepts_of(MAN.get('accepts')) == FULL_ACCEPTS
+    ok = all(os.path.exists(f'{PKG}/bridges/{b}') for b in ('fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar', 'fmlbridge-1.12.2.jar')) and MAN['javaMin'] == {'vanilla': 21, 'neoforge': 21, 'forge': 21, 'forge-1.12.2': 21} and MAN.get('javaLaunch') == {'forge-1.12.2': {'min': 8, 'max': 8}}
+    print(('OK   ' if ok else 'FAIL ') + 'package: all bridge jars under bridges/, javaMin 21 per platform, javaLaunch', flush=True)
+    if not ok: fails.append('package bridges/javaMin')
+    ok = MAN.get('interfaceRevision') == '1.3.2' and accepts_of(MAN.get('accepts')) == FULL_ACCEPTS
     print(('OK   ' if ok else 'FAIL ') + 'package manifest (v1.3.1): accepts per platform from the packaged bridges ' + str(MAN.get('accepts')), flush=True)
     if not ok: fails.append('package layout')
 else:
@@ -202,10 +204,10 @@ def vanilla():
     code, out, err = bake('version', {})
     v = [x for x in out if x['type'] == 'result']
     check('version: interface 1.3, platforms, mappingCache, javaMin 21 per platform', code == 0 and v and v[0].get('interface') == '1.3' and v[0]['platforms'].get('forge') == ['1.20.1'] and 'mappingCache' in v[0]
-          and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21}, str(v))
+          and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21, 'forge-1.12.2': 21} and v[0].get('javaLaunch') == {'forge-1.12.2': {'min': 8, 'max': 8}}, str(v))
     check('version (v1.3.1): interfaceRevision 1.3.1, accepts per platform matches the bridges present (full build)',
-          code == 0 and v and v[0].get('interfaceRevision') == '1.3.1' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
-          and all(p['missingBridges'] == [] for p in v[0]['accepts']), str(v and v[0].get('accepts')))
+          code == 0 and v and v[0].get('interfaceRevision') == '1.3.2' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
+          and all(p['missingBridges'] == [] for p in v[0]['accepts'] if not p.get('planned')), str(v and v[0].get('accepts')))
     libv = v[0].get('libs', {}) if v else {}
     want = {n.rsplit('-', 1)[0]: n.rsplit('-', 1)[1][:-4] for n in CP_NAMES if not n.startswith('intermediary')}
     check('version.libs: the versions on the real class path (asm, sponge-mixin, mixinextras ...)', all(libv.get(a) == ver_ for a, ver_ in want.items()) and libv.get('asm') == '9.10.1',

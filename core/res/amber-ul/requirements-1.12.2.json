@@ -1,0 +1,8 @@
+{
+ "mcVersion": "1.12.2",
+ "platforms": [
+  "forge-1.12.2"
+ ],
+ "_note": "forge-1.12.2 (interface v1.3.2): no mapping tables are needed (FML deobfuscates at run time and the bridge caches the transformer chain's output). Forge 14.23.5.x itself (version.json + libraries/) and vanilla 1.12.2 are provided by the launcher. Loader libraries are added from amber-ul/loader-libs.json; they run the bake stages only (on Java 21), not the Java 8 game.",
+ "files": []
+}

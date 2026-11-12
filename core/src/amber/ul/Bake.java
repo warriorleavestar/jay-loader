@@ -21,15 +21,26 @@ public final class Bake {
     /** Interface revision (docs/amber-bake-interface.md). 1.1 added optional fields, 1.2 the warm and gc stages, 1.3 javaMin,
      *  generated loader libraries, the packaged layout, the rebuilt/reused report and runtime problem files; protocol (cache layout) unchanged. */
     public static final String INTERFACE = "1.3";
-    /** Additive revision within INTERFACE (v1.3.1: `accepts`); consumers that check `interface` keep working. */
-    public static final String INTERFACE_REVISION = "1.3.1";
+    /** Additive revision within INTERFACE (v1.3.1: `accepts`; v1.3.2: the forge-1.12.2 platform and `javaLaunch`); consumers that check `interface` keep working. */
+    public static final String INTERFACE_REVISION = "1.3.2";
     /** Java major version the loader needs, per platform (v1.3). The loader is Java 21 bytecode on every platform; it is
      *  also what the baked launch needs, whatever the game version's own json asks for (Forge 1.20.1 asks for 17). */
     static final Map<String, Integer> JAVA_MIN = new LinkedHashMap<>();
-    static { JAVA_MIN.put("vanilla", 21); JAVA_MIN.put("neoforge", 21); JAVA_MIN.put("forge", 21); }
+    static { JAVA_MIN.put("vanilla", 21); JAVA_MIN.put("neoforge", 21); JAVA_MIN.put("forge", 21); JAVA_MIN.put("forge-1.12.2", 21); }
+    /** Platforms whose launch runs on a different Java than the bake stages (v1.3.2): forge-1.12.2 bakes on the loader's
+     *  Java 21 but launches on Java 8 exactly (LaunchWrapper; most 1.12 coremods break on 9+). Reported as javaLaunch. */
+    static final Map<String, int[]> JAVA_LAUNCH = new LinkedHashMap<>();
+    static { JAVA_LAUNCH.put("forge-1.12.2", new int[] { 8, 8 }); }
     /** Game versions per platform this loader can bake (interface v1.1). */
     static final Map<String, List<String>> PLATFORMS = new LinkedHashMap<>();
-    static { PLATFORMS.put("vanilla", List.of("1.21.1")); PLATFORMS.put("neoforge", List.of("1.21.1")); PLATFORMS.put("forge", List.of("1.20.1")); }
+    static { PLATFORMS.put("vanilla", List.of("1.21.1")); PLATFORMS.put("neoforge", List.of("1.21.1")); PLATFORMS.put("forge", List.of("1.20.1")); PLATFORMS.put("forge-1.12.2", List.of("1.12.2")); }
+    /** Platforms that are planned but not built yet (docs/forge-1.12.2-plan.md). They are listed in `accepts` with
+     *  available=false and the bridge they will need, so consumers can say "not yet" instead of "unknown"; every stage that
+     *  would bake or launch one answers platform_unavailable. Not in PLATFORMS, supportedMc or javaMin. */
+    static final Map<String, List<String>> PLANNED = new LinkedHashMap<>();
+    /** The runtime part of a planned platform (forge-1.12.2: the Java 8 LaunchWrapper bridge from core-legacy). */
+    static final Map<String, String> PLANNED_BRIDGE = new LinkedHashMap<>();
+    static { }   // none at the moment (forge-1.12.2 was planned until interface 1.3.2)
     static final Gson G = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
     static PrintStream out;
 
@@ -75,6 +86,9 @@ public final class Bake {
         JsonObject jm = new JsonObject(); JAVA_MIN.forEach(jm::addProperty); r.add("javaMin", jm);
         r.addProperty("javaRuntime", Runtime.version().feature());
         r.add("accepts", accepts());
+        JsonObject jl = new JsonObject();
+        JAVA_LAUNCH.forEach((k, v) -> { JsonObject x = new JsonObject(); x.addProperty("min", v[0]); x.addProperty("max", v[1]); jl.add(k, x); });
+        r.add("javaLaunch", jl);
         emit(r); return 0;
     }
 
@@ -105,6 +119,7 @@ public final class Bake {
                         if (has("fabricbridge-forge.jar", missing)) { acc.add("fabric"); acc.add("quilt"); }
                     } else { available = false; has("fabricbridge-forge.jar", missing); }
                 }
+                case "forge-1.12.2" -> { if (has(LegacyPlatform.BRIDGE, missing)) acc.add("forge"); else available = false; }
                 default -> { }
             }
             JsonObject p = new JsonObject();
@@ -113,7 +128,21 @@ public final class Bake {
             JsonArray m = new JsonArray(); missing.forEach(m::add); p.add("missingBridges", m);
             out.add(p);
         }
+        for (var e : PLANNED.entrySet()) for (String mc : e.getValue()) {
+            JsonObject p = new JsonObject();
+            p.addProperty("platform", e.getKey()); p.addProperty("mc", mc); p.addProperty("available", false);
+            p.add("accepts", new JsonArray());
+            JsonArray m = new JsonArray(); m.add(PLANNED_BRIDGE.get(e.getKey())); p.add("missingBridges", m);
+            p.addProperty("planned", true);
+            out.add(p);
+        }
         return out;
+    }
+    /** A planned platform (or a game version only a planned platform covers): report platform_unavailable. */
+    static boolean plannedOnly(String platform, String mc) {
+        if (!PLANNED.containsKey(platform)) return false;
+        problem("error", "platform_unavailable", null, null, null, "platform " + platform + " (Minecraft " + mc + ") is planned but not available in loader " + LOADER_VERSION);
+        return true;
     }
     static boolean has(String bridge, List<String> missing) {
         if (Files.isRegularFile(LoaderHome.bridge(bridge))) return true;
@@ -130,6 +159,7 @@ public final class Bake {
 
     static int requirements(JsonObject q) throws Exception {
         String mc = str(q, "mcVersion");
+        if (q.has("platform") && plannedOnly(q.get("platform").getAsString(), mc)) return 1;
         var in = Bake.class.getResourceAsStream("/amber-ul/requirements-" + mc + ".json");
         if (in == null) { problem("error", "incompatible_mc", null, null, null, "Minecraft " + mc + " is not supported by this loader"); return 1; }
         JsonObject table = JsonParser.parseString(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
@@ -138,7 +168,8 @@ public final class Bake {
         JsonArray files = new JsonArray(); Map<String, String> byPath = new HashMap<>();
         for (JsonElement e : table.getAsJsonArray("files")) { JsonObject f = e.getAsJsonObject().deepCopy(); if (f.has("kind") && f.get("kind").getAsString().equals("loader-lib")) continue; files.add(f); byPath.put(f.get("path").getAsString(), f.get("sha1").getAsString()); }
         for (JsonElement e : loaderLibs()) files.add(e.getAsJsonObject().deepCopy());   // v1.3: exactly the jars the loader runs with
-        if (q.has("versionJson")) {   // Mojang's client mappings: url/sha1 come from the version json Amber already has
+        if (platform.equals(LegacyPlatform.KIND)) { }   // 1.12.2 has no Mojang mappings and the platform needs none
+        else if (q.has("versionJson")) {   // Mojang's client mappings: url/sha1 come from the version json Amber already has
             JsonObject vj = JsonParser.parseString(Files.readString(Path.of(q.get("versionJson").getAsString()))).getAsJsonObject();
             JsonObject cm = vj.getAsJsonObject("downloads").getAsJsonObject("client_mappings");
             JsonObject f = new JsonObject(); f.addProperty("kind", "mappings"); f.addProperty("url", cm.get("url").getAsString());
@@ -147,7 +178,9 @@ public final class Bake {
             if (have == null) files.add(f);   // the bundled table may already list it (Forge 1.20.1); then the sha1s must agree
             else if (!have.equalsIgnoreCase(f.get("sha1").getAsString())) { problem("error", "incompatible_mc", null, null, null, "versionJson client_mappings sha1 " + f.get("sha1").getAsString() + " differs from the bundled table " + have); return 1; }
         } else if (!byPath.containsKey("mappings/" + mc + "/client_mappings.txt")) problem("warning", "unsupported_feature", null, null, null, "no versionJson in request: client_mappings entry omitted");
-        JsonObject r = result("requirements"); r.add("files", files); r.addProperty("javaMin", JAVA_MIN.get(platform)); emit(r); return 0;
+        JsonObject r = result("requirements"); r.add("files", files); r.addProperty("javaMin", JAVA_MIN.get(platform));
+        if (JAVA_LAUNCH.containsKey(platform)) { JsonObject jl = new JsonObject(); jl.addProperty("min", JAVA_LAUNCH.get(platform)[0]); jl.addProperty("max", JAVA_LAUNCH.get(platform)[1]); r.add("javaLaunch", jl); }
+        emit(r); return 0;
     }
 
     /** Stage 1: one mod file (and its nested jars) -> metadata + baked jars in the shared, content-addressed cache. */
@@ -205,7 +238,9 @@ public final class Bake {
         // v1.1 platform: {kind: vanilla | neoforge | forge, installDir, mappingsDir?, manifest?, production?}
         JsonObject pf = q.has("platform") ? q.getAsJsonObject("platform") : new JsonObject();
         String kind = pf.has("kind") ? pf.get("kind").getAsString() : "vanilla";
+        if (plannedOnly(kind, rq.mc)) return 1;
         if (!PLATFORMS.getOrDefault(kind, List.of()).contains(rq.mc)) { problem("error", "incompatible_loader", null, null, null, "platform " + kind + " is not supported on Minecraft " + rq.mc + " (supported: " + PLATFORMS + ")"); return 1; }
+        if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf);
         int javaMin = JAVA_MIN.get(kind);
         if (q.has("javaMajor") && q.get("javaMajor").getAsInt() < javaMin) { error("java_too_old", "the loader needs Java " + javaMin + " or newer for " + kind + " (request javaMajor " + q.get("javaMajor").getAsInt() + ")"); return 1; }
         Path installDir = kind.equals("vanilla") ? null : path(pf, "installDir");
@@ -309,6 +344,9 @@ public final class Bake {
     static int warm(JsonObject q) throws Exception {
         Path stateFile = path(q, "stateFile");
         JsonObject st = JsonParser.parseString(Files.readString(stateFile, StandardCharsets.UTF_8)).getAsJsonObject();
+        if (st.has("platform") && st.getAsJsonObject("platform").get("kind").getAsString().equals(LegacyPlatform.KIND)) {
+            error("not_supported", "warm does not apply to " + LegacyPlatform.KIND + ": its transformer cache fills while the game runs"); return 1;
+        }
         if (!st.has("libraries")) { error("stale_state", "state file has no libraries (written by an interface v1 loader): run bake-instance again"); return 1; }
         long t0 = System.nanoTime();
         JsonObject prevWarm = st.deepCopy();
@@ -356,7 +394,7 @@ public final class Bake {
     static JsonArray cacheFiles() { JsonArray a = new JsonArray(); for (Path p : CacheUse.snapshot()) if (Files.exists(p)) a.add(p.toString()); return a; }
 
     /** Loader-managed parts of a cache root; gc never looks anywhere else (classcache, changed-classes, isolation data stay). */
-    static final List<String> MANAGED = List.of("baked", "nested", "mappings");
+    static final List<String> MANAGED = List.of("baked", "nested", "mappings", "legacy-1.12.2");   // legacy-1.12.2: transformer caches of the pre-0.4 layout (now per instance), never live
     /** Temp names left by a killed bake (pid + nanoTime, ".tmp"): removable once older than tmpMaxAgeHours. */
     static boolean isTemp(String n) { return n.contains(".tmp") || n.matches("bake-\\d+-\\d+\\.(pre|cls)\\.jar") || n.matches(".+\\.t"); }
 
@@ -383,6 +421,9 @@ public final class Bake {
             Path sf = Path.of(e.getAsString());
             if (!Files.isRegularFile(sf)) { error("bad_request", "live state file not found (refusing to guess): " + sf); return 1; }
             JsonObject st = JsonParser.parseString(Files.readString(sf, StandardCharsets.UTF_8)).getAsJsonObject();
+            // forge-1.12.2 bakes nothing into cacheRoot (its transformer cache lives in the instance): valid without cacheFiles
+            boolean legacy = st.has("platform") && LegacyPlatform.KIND.equals(st.getAsJsonObject("platform").get("kind").getAsString());
+            if (legacy && !st.has("cacheFiles")) continue;
             if (!st.has("cacheFiles")) { error("stale_state", "state has no cacheFiles (run warm on it first): " + sf); return 1; }
             for (JsonElement f : st.getAsJsonArray("cacheFiles")) {
                 Path p = Path.of(f.getAsString()).toAbsolutePath().normalize();
