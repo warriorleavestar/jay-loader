@@ -160,6 +160,10 @@ if '--no-launch' not in sys.argv:
     shutil.rmtree(os.path.join(CACHE, 'legacy-1.12.2'), ignore_errors=True)   # left by the gc check of an earlier run
     USER_CFG = os.path.join(GAME, 'config', 'amber-user-edit.cfg')
     if os.path.exists(USER_CFG): os.remove(USER_CFG)
+    # JEI rewrites its per-world settings (config/jei/worldSettings.cfg, part of the cache key) whenever a world is entered,
+    # so the cold/warm pair below would depend on what earlier runs left there: both start without it
+    JEI_WORLDS = os.path.join(GAME, 'config', 'jei', 'worldSettings.cfg')
+    if os.path.exists(JEI_WORLDS): os.remove(JEI_WORLDS)
     m, s = launch('cold', extra=DEBUG)
     check(f'cold launch from the launch block: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/cold.log, {GAME}/logs/latest.log')
     check(f'cold launch filled the cache in the instance (stored {s.get("stored")})', int(s.get('stored', 0)) > 1000, {k: v for k, v in s.items() if k != '_log'})
@@ -167,6 +171,7 @@ if '--no-launch' not in sys.argv:
     # API review #1: a config changed after loading (here: by the user while the game runs) is not an alias of this run
     def user_edit():
         os.makedirs(os.path.dirname(USER_CFG), exist_ok=True); open(USER_CFG, 'w').write('# changed by the user after loading\nB:feature=true\n')
+    if os.path.exists(JEI_WORLDS): os.remove(JEI_WORLDS)
     m, s = launch('warm', extra=DEBUG, at_world=user_edit)
     warm_file = s['_file']
     check(f'warm launch: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/warm.log')
