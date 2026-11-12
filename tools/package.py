@@ -21,7 +21,7 @@ R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.a
 B = f'{R}/build'
 JAVA = os.environ.get('JAVA') or (f'{R}/tools/jre21/bin/java.exe' if os.path.isfile(f'{R}/tools/jre21/bin/java.exe') else shutil.which('java'))
 CORE_ONLY = '--core-only' in sys.argv
-BRIDGES = ['fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar']
+BRIDGES = ['fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar', 'fmlbridge-1.12.2.jar']
 EPOCH = (1980, 2, 1, 0, 0, 0)
 
 def jar_dir(src, out):
@@ -50,6 +50,12 @@ def main():
     for e in cp: shutil.copyfile(e if os.path.isabs(e) else f'{R}/{e}', f'{stage}/libs/{os.path.basename(e)}')
     for b in bridges: shutil.copyfile(f'{B}/{b}', f'{stage}/bridges/{b}')
     if not bridges: os.rmdir(f'{stage}/bridges')
+    # forge-1.12.2 runs its bridge (the core-legacy runtime) inside the game's Java 8 JVM: every class must be Java 8 bytecode
+    if 'fmlbridge-1.12.2.jar' in bridges:
+        with zipfile.ZipFile(f'{stage}/bridges/fmlbridge-1.12.2.jar') as z:
+            newer = [n for n in z.namelist() if n.endswith('.class') and int.from_bytes(z.read(n)[6:8], 'big') > 52]
+            if newer: sys.exit('package: fmlbridge-1.12.2.jar has classes newer than Java 8: ' + ', '.join(newer[:5]))
+            if 'amber/ul/legacy/lw/CachingLaunchClassLoader.class' not in z.namelist(): sys.exit('package: fmlbridge-1.12.2.jar lacks the transformer cache (built without launchwrapper?)')
     # licences: the project's, the notices, the fetched library texts, and the MIT texts Mixin/MixinExtras carry in their jars
     shutil.copyfile(f'{R}/LICENSE', f'{stage}/LICENSE'); shutil.copyfile(f'{R}/THIRD_PARTY_NOTICES.md', f'{stage}/THIRD_PARTY_NOTICES.md')
     shutil.copyfile(f'{R}/COMMERCIAL-EXCEPTION.md', f'{stage}/COMMERCIAL-EXCEPTION.md')
@@ -74,7 +80,7 @@ def main():
     man = {
         'schema': 'amber-ul/package@1',
         'loaderVersion': ver['loaderVersion'], 'pipelineVersion': ver['pipelineVersion'], 'protocol': ver['protocol'], 'interface': ver['interface'],
-        'platforms': ver['platforms'], 'javaMin': ver['javaMin'],
+        'platforms': ver['platforms'], 'javaMin': ver['javaMin'], 'javaLaunch': ver['javaLaunch'],   # v1.3.2: Java the game runs on, per platform (forge-1.12.2: 8..8)
         'interfaceRevision': ver['interfaceRevision'], 'accepts': ver['accepts'],   # v1.3.1: from the packaged bridges themselves
         'entry': {'bake': 'amber.ul.Bake', 'launch': 'amber.ul.Launcher'},
         'classpath': classpath,

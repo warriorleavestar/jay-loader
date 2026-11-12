@@ -16,3 +16,4 @@ fabricforgeprobe/out/
 fabricforgeprobe/*.jar
 forgeworldtest/out/
 deps/
+legacytest/out/

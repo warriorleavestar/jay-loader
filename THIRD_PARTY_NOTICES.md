@@ -26,6 +26,12 @@ Nothing is copied from Forge or NeoForge, and nothing of them is bundled.
 - The FML bridges (`fmlbridge/`, `fmlbridge-forge/`) call FML's public classes, which come from the user's own Forge/NeoForge installation at run time.
 - Forge's JS coremods engine and Nashorn are not bundled. On the Forge 1.20.1 platform the coremods engine is loaded from the user's Forge installation.
 
+### Minecraft Forge 1.12.2 and LaunchWrapper (forge-1.12.2 platform)
+Nothing of Forge 1.12.2 or of Mojang's LaunchWrapper is copied or bundled; both come from the user's own Forge 1.12.2 installation at run time.
+- `core-legacy/` (packaged as `bridges/fmlbridge-1.12.2.jar`) is Jay Loader's own code. `CachingLaunchClassLoader` subclasses LaunchWrapper's `LaunchClassLoader`, is compiled against launchwrapper 1.12, and reads its private state by reflection; its class-loading behaviour follows `LaunchClassLoader.findClass`, but no code was copied.
+- `core/src/amber/ul/meta/LegacyForgeMeta.java` reads Forge 1.12 mod metadata (`@Mod`, `mcmod.info`, coremod manifest attributes, FML dependency strings) with its own parser.
+- `legacytest/` is a test-only mod that refers to Minecraft classes by their SRG names, as 1.12 mods do. It is never packaged.
+
 ### Minecraft
 Nothing from Minecraft is in this repository or in the package: no game jars, mapping files or patched/binpatched jars. The source refers to Minecraft classes by their official (Mojang) names, as mods do. Mojang's mappings are downloaded by the user's launcher at bake time, under Mojang's own terms.
 
