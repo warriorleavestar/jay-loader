@@ -243,7 +243,7 @@ public final class Bake {
         String kind = pf.has("kind") ? pf.get("kind").getAsString() : "vanilla";
         if (plannedOnly(kind, rq.mc)) return 1;
         if (!PLATFORMS.getOrDefault(kind, List.of()).contains(rq.mc)) { problem("error", "incompatible_loader", null, null, null, "platform " + kind + " is not supported on Minecraft " + rq.mc + " (supported: " + PLATFORMS + ")"); return 1; }
-        QuickPlay quick = QuickPlay.of(q);   // v1.3.3: checked before anything is baked
+        QuickPlay quick = QuickPlay.of(q, kind.equals(LegacyPlatform.KIND));   // v1.3.3: checked before anything is baked
         if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf, quick);
         int javaMin = JAVA_MIN.get(kind);
         if (q.has("javaMajor") && q.get("javaMajor").getAsInt() < javaMin) { error("java_too_old", "the loader needs Java " + javaMin + " or newer for " + kind + " (request javaMajor " + q.get("javaMajor").getAsInt() + ")"); return 1; }

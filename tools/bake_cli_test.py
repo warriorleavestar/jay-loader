@@ -210,7 +210,7 @@ def vanilla():
     v = [x for x in out if x['type'] == 'result']
     check('version: interface 1.3, platforms, mappingCache, javaMin 21 per platform', code == 0 and v and v[0].get('interface') == '1.3' and v[0]['platforms'].get('forge') == ['1.20.1'] and 'mappingCache' in v[0]
           and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21, 'forge-1.12.2': 21} and v[0].get('javaLaunch') == {'forge-1.12.2': {'min': 8, 'max': 8}}, str(v))
-    check('version (v1.3.1): interfaceRevision 1.3.1, accepts per platform matches the bridges present (full build)',
+    check('version (v1.3.3): interfaceRevision 1.3.3, accepts per platform matches the bridges present (full build)',
           code == 0 and v and v[0].get('interfaceRevision') == '1.3.3' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
           and all(p['missingBridges'] == [] for p in v[0]['accepts'] if not p.get('planned')), str(v and v[0].get('accepts')))
     libv = v[0].get('libs', {}) if v else {}
@@ -260,6 +260,7 @@ def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     L = res[0]['launch'] if res else {}
     check(f'quickPlay {kind}: launch.quickPlay, --quickPlaySingleplayer after the state args', code == 0 and L.get('quickPlay') == {'singleplayer': world, 'via': 'game'}
           and L['gameArgsPrefix'][-2:] == ['--quickPlaySingleplayer', world] and L['gameArgsPrefix'][:3][0] == '--state', f'{code} {L.get("gameArgsPrefix")} {out[-1:]}')
+    check(f'quickPlay {kind}: only quickPlay changed -> every bake reused (bakeMisses 0)', res and res[0].get('stats', {}).get('bakeMisses') == 0, str(res and res[0].get('stats')))
     if not res: return
     t = time.time(); ok, seen = launch(f'{kind}-qp', res[0], ver, mcv, gamedir, 'joined the game', [], [])
     log = open(f'{T}/{kind}-qp.log', encoding='utf-8', errors='replace').read()
