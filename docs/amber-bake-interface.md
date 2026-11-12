@@ -1,6 +1,6 @@
-# Interface between the universal loader and Amber's bake framework (v1.3.1)
+# Interface between the universal loader and Amber's bake framework (v1.3.3)
 
-v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; **v1.3.2 2026-11-12**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
+v1 2026-11-04 (draft); v1.1 2026-11-09; v1.2 2026-11-09; v1.3 2026-11-10; v1.3.1 2026-11-11; v1.3.2 2026-11-12; **v1.3.3 2026-11-12**. Written for the Amber launcher side. The loader is still a prototype. `amber.ul.Bake version` reports `"interface":"1.3"`.
 
 ## Bake-time mixin pass (NeoForge platform, 2026-11-11)
 
@@ -274,3 +274,40 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - Problem codes: dependency errors use `missing_dep` on every platform (Amber should still accept the older `missing_dependency`); `bad_platform` (error) means `platform.installDir` is not a usable Forge 1.12.2 install (no `version.json`, not a LaunchWrapper profile, listed libraries missing).
 - Runtime problems: the launch block passes `-Damber.ul.problemsFile` (also `launch.problemsFile`) and `-Damber.ul.loaderVersion`; `LegacyLaunch` writes the usual launch line and `@amber-ul/problem` lines for what fails before the game takes over: `legacy_java_unsupported` (error; `javaVersion`, `required`), `legacy_launchwrapper_missing` (error), `legacy_launch_failed` (error; `exception`, `rootCause`?, `log`; when LaunchWrapper itself caught the failure the cause is only in `logs/latest.log`), `legacy_cache_disabled` (warning; `cacheDir`; the launch goes on without the cache). Later failures are FML's own crash reports. Java 8 writes stdout in the platform code page, so `@amber-ul/problem` lines (and the problems file) are pure ASCII: anything outside 0x20-0x7E is a JSON `\uXXXX` escape.
 - Package: `manifest.json` carries `javaLaunch`; `bridges/fmlbridge-1.12.2.jar` is the core-legacy runtime, Java 8 bytecode throughout (checked when packaging).
+
+## v1.3.3: quick play (additive)
+
+`version` reports `"interfaceRevision":"1.3.3"`. A launcher that does not send the new field gets exactly the v1.3.2 behaviour, byte for byte. A loader older than 1.3.3 ignores an unknown `quickPlay`. A launcher should therefore treat quick play as in effect only when `interfaceRevision` is 1.3.3 or later **and** the result has `launch.quickPlay`.
+
+- `bake-instance` takes an optional `quickPlay`, exactly one of:
+  ```
+  "quickPlay": {"singleplayer": "<world folder>"}
+  "quickPlay": {"multiplayer": "<host>[:<port>]"}
+  ```
+  - Both values must be JSON strings. A number, boolean, null or array is refused. `gameDir` / `instanceDir`, when present, must be strings too.
+  - Quick play starts the game client: a request with `quickPlay` and a `side` other than `client` is refused.
+  - `singleplayer`: the folder name under `<gameDir>/saves/`. One path segment: no `/`, `\`, `:` or control characters, and not `.` or `..`. It must also be a valid file name on the system (on Windows, not `<>"|?*`). The world must already exist (`level.dat`), and the name must be the folder's own name exactly: a name that only matches in another letter case (Windows) or another Unicode normalization (macOS NFC/NFD) is refused, since the game compares names exactly. A string with an unpaired UTF-16 surrogate is refused. The bake only reads the world and never creates one.
+  - **The saves folder is resolved from the request's `gameDir`, or `instanceDir` when there is no `gameDir`. This must be the same directory the launcher passes to the game as `--gameDir`.** Otherwise the bake checks one folder and the game looks in another.
+  - Folder names with non-ASCII characters are accepted, with a `quickplay_world_name` warning. On 1.20.1 / 1.21.1 the game reads its arguments in the Windows code page, so a name outside it may not be found. On 1.12.2 the loader's own argument is percent-encoded and pure ASCII, but Java 8 handles file names in the system code page. A name starting with `-` gets the same warning.
+  - `multiplayer`: an ASCII host name (letters, digits, `.`, `-`, `_`; not starting or ending with `-` or `.`) or IPv4 address, with an optional `:port` (decimal 1-65535, default 25565), or `[IPv6]:port`. Internationalized domain names are not accepted: use their ASCII (punycode) form.
+  - Anything else gives `{"type":"error","code":"bad_request"}` and exit 1, before anything is baked. That includes both keys, neither key, an extra key, a missing world, a bad port, a bare IPv6 address, or a host starting with `-`.
+  - `quickPlay` is not part of `stateKey`. A bake that only changes it reuses every cached file (`stats.bakeMisses` 0).
+- The launch block then carries `quickPlay` (an echo, for the UI) and the arguments that do it:
+  ```
+  "launch": {..., "quickPlay": {"singleplayer": "<world folder>", "via": "game" | "amber-ul"}, ...}
+  "launch": {..., "quickPlay": {"multiplayer": "<host>:<port>", "via": "game"}, ...}   // an IPv6 host in brackets
+  ```
+  `via: "game"` = the game's own quick play arguments; `via: "amber-ul"` = the loader does it (Forge 1.12.2 singleplayer). Launch exactly as before: `jvmArgs`, `classpath`, `mainClass`, `gameArgsPrefix`, then the launcher's own game arguments. There is nothing extra to append.
+
+  | platform | singleplayer | multiplayer |
+  |---|---|---|
+  | vanilla / NeoForge 1.21.1, Forge 1.20.1 | `gameArgsPrefix` ends with `"--quickPlaySingleplayer", "<world>"` | `gameArgsPrefix` ends with `"--quickPlayMultiplayer", "<host>:<port>"` |
+  | forge-1.12.2 | `jvmArgs` has `-Damber.ul.legacy.quickPlay=<world, percent-encoded UTF-8>`; `gameArgsPrefix` stays `[]` | `gameArgsPrefix` is `["--server", "<host>", "--port", "<port>"]` (all strings; an IPv6 host as `[addr]`, since FML joins `host:port`) |
+
+- **The launcher must not add its own quick play arguments when it sends `quickPlay`:** no `--quickPlayPath`, `--quickPlaySingleplayer`, `--quickPlayMultiplayer`, `--quickPlayRealms`, `--server` or `--port`. On 1.20.1 / 1.21.1 the game refuses an option given twice and does not start; on 1.12.2 a second `--server` / `--port` is not defined behaviour either. In the version json's `arguments.game`, the rules with the features `is_quick_play_singleplayer`, `is_quick_play_multiplayer`, `is_quick_play_realms` and `has_quick_plays_support` must evaluate to false.
+- Pass every element as its own process argument (an argument list, never one joined command line). World names may contain spaces.
+- On 1.20.1 / 1.21.1 the title screen is never shown. The loader's "title screen reached" moment (class cache save, `fabric_init_not_run` check) fires when the game's quick play starts the join, in `QuickPlay.joinSingleplayerWorld` / `joinMultiplayerWorld`, after the first resource reload. These hooks are in `amber-ul/hooks/<mc>.json`. If the method is missing from a game jar, the game bake fails (`hook ... found no injection point`) instead of skipping it silently. Tested on vanilla 1.21.1 and Forge 1.20.1; NeoForge 1.21.1 uses the same hook table but has no quick play e2e test yet. If the world or server cannot be reached, the game shows its own error screen and returns to the menu.
+- On Forge 1.12.2 singleplayer, core-legacy waits until FML has finished loading and the main menu is up: vanilla's `GuiMainMenu`, a subclass, or CustomMainMenu's `GuiCustom` (RLCraft). It then opens the world on the client thread the way a click in the world list does, with the world's `WorldSummary` from the save list. If the world list would ask the player first (`WorldSummary.askToOpenWorld`: a world saved by a newer version or a snapshot) or the game says it cannot load the world (`canLoadWorld`), the world is not opened: the game stays on the main menu and core-legacy reports a `legacy_quickplay_failed` warning. Otherwise the summary goes to `FMLClientHandler.tryLoadExistingWorld`; the world keeps its own display name (`level.dat` `LevelName` is not rewritten). FML's own screens can still appear after that (a save from an old FML without its data, missing mods); these are FML's, need the player, and are not reported as problems. If the menu never comes up (default wait 30 minutes, `-Damber.ul.legacy.quickPlayWaitMs`) or opening throws, the game stays on the menu and core-legacy reports `legacy_quickplay_failed` as a runtime problem (warning or error; `world`).
+- On Forge 1.12.2 multiplayer the game's own `--server` / `--port` are used: FML connects once loading is done (tested against a local listener on 127.0.0.1 and [::1]: the client sends its handshake, protocol 340, straight after loading). If the server cannot be reached, the game shows its disconnect screen and then the main menu.
+- A launch block made with `quickPlay` is for that quick play. A launcher that caches launch blocks must not reuse it for a plain launch, or the reverse.
+- Everything runs inside the normal game client (its integrated server for singleplayer). Nothing is written by the bake. The game writes only its own files in `gameDir`.

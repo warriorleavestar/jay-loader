@@ -29,6 +29,11 @@ public final class GameHooks {
         if (titleSeen) return;
         titleSeen = true; mark("TitleScreen.init"); listener.accept(Event.TITLE_SCREEN);
     }
+    /** v1.3.3 quick play: the title screen is skipped; QuickPlay.join*World is the same moment (first reload done). */
+    public static synchronized void quickPlay() {
+        if (titleSeen) return;
+        titleSeen = true; mark("QuickPlay (跳过标题画面)"); listener.accept(Event.TITLE_SCREEN);
+    }
     public static long sinceJvmStart() { return System.currentTimeMillis() - ManagementFactory.getRuntimeMXBean().getStartTime(); }
     static void mark(String what) { System.out.printf("[amber-ul] @%d ms (自 JVM 启动) %s%n", sinceJvmStart(), what); }
 }

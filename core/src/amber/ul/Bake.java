@@ -22,7 +22,7 @@ public final class Bake {
      *  generated loader libraries, the packaged layout, the rebuilt/reused report and runtime problem files; protocol (cache layout) unchanged. */
     public static final String INTERFACE = "1.3";
     /** Additive revision within INTERFACE (v1.3.1: `accepts`; v1.3.2: the forge-1.12.2 platform and `javaLaunch`); consumers that check `interface` keep working. */
-    public static final String INTERFACE_REVISION = "1.3.2";
+    public static final String INTERFACE_REVISION = "1.3.3";
     /** Java major version the bake stages need, per platform (v1.3): the loader is Java 21 bytecode on every platform.
      *  For vanilla, neoforge and forge it is also what the baked launch needs, whatever the game version's own json asks
      *  for (Forge 1.20.1 asks for 17). Not for forge-1.12.2: its launch runs on JAVA_LAUNCH (Java 8). A consumer that
@@ -243,7 +243,8 @@ public final class Bake {
         String kind = pf.has("kind") ? pf.get("kind").getAsString() : "vanilla";
         if (plannedOnly(kind, rq.mc)) return 1;
         if (!PLATFORMS.getOrDefault(kind, List.of()).contains(rq.mc)) { problem("error", "incompatible_loader", null, null, null, "platform " + kind + " is not supported on Minecraft " + rq.mc + " (supported: " + PLATFORMS + ")"); return 1; }
-        if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf);
+        QuickPlay quick = QuickPlay.of(q, kind.equals(LegacyPlatform.KIND));   // v1.3.3: checked before anything is baked
+        if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf, quick);
         int javaMin = JAVA_MIN.get(kind);
         if (q.has("javaMajor") && q.get("javaMajor").getAsInt() < javaMin) { error("java_too_old", "the loader needs Java " + javaMin + " or newer for " + kind + " (request javaMajor " + q.get("javaMajor").getAsInt() + ")"); return 1; }
         Path installDir = kind.equals("vanilla") ? null : path(pf, "installDir");
@@ -310,7 +311,9 @@ public final class Bake {
                 "--add-exports", "java.base/sun.security.util=ALL-UNNAMED", "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=java.naming")) jvm.add(x);   // FML / securejarhandler
         if (kind.equals("forge") && !production) jvm.add("-Damber.forge.production=false");   // FMLLoader.isProduction(): true unless asked (dev only)
         launch.add("jvmArgs", jvm);
-        JsonArray pre = new JsonArray(); pre.add("--state"); pre.add(stateFile.toString()); pre.add("--"); launch.add("gameArgsPrefix", pre);
+        JsonArray pre = new JsonArray(); pre.add("--state"); pre.add(stateFile.toString()); pre.add("--");
+        if (quick != null) { quick.modernArgs(pre); launch.add("quickPlay", quick.json("game")); }   // v1.3.3: the game's own --quickPlay*
+        launch.add("gameArgsPrefix", pre);
         launch.addProperty("stateFile", stateFile.toString());
         r.add("launch", launch);
         JsonObject stats = new JsonObject(); stats.addProperty("bakeHits", p.baker.hits); stats.addProperty("bakeMisses", p.baker.misses);

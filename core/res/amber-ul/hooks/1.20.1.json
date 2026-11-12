@@ -8,6 +8,9 @@
     { "id": "server_start", "owner": "net/minecraft/server/Main", "method": "main", "desc": "([Ljava/lang/String;)V",
       "at": "after_invoke", "target": "net/minecraft/server/Bootstrap.bootStrap()V", "call": "amber/ul/runtime/GameHooks.startServer",
       "_why": "dedicated server only; integrated server runs no entrypoints (as Fabric)" },
-    { "id": "title_screen", "owner": "net/minecraft/client/gui/screens/TitleScreen", "method": "init", "desc": "()V", "at": "head", "call": "amber/ul/runtime/GameHooks.titleScreen" }
+    { "id": "title_screen", "owner": "net/minecraft/client/gui/screens/TitleScreen", "method": "init", "desc": "()V", "at": "head", "call": "amber/ul/runtime/GameHooks.titleScreen" },
+    { "id": "quick_play_singleplayer", "owner": "net/minecraft/client/quickplay/QuickPlay", "method": "joinSingleplayerWorld", "desc": "(Lnet/minecraft/client/Minecraft;Ljava/lang/String;)V", "at": "head", "call": "amber/ul/runtime/GameHooks.quickPlay",
+      "_why": "interface v1.3.3: with --quickPlay* the title screen never opens; the game reaches these after its first resource reload, the same point" },
+    { "id": "quick_play_multiplayer", "owner": "net/minecraft/client/quickplay/QuickPlay", "method": "joinMultiplayerWorld", "desc": "(Lnet/minecraft/client/Minecraft;Ljava/lang/String;)V", "at": "head", "call": "amber/ul/runtime/GameHooks.quickPlay" }
   ]
 }

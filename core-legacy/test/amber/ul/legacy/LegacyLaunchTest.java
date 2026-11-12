@@ -27,6 +27,11 @@ public final class LegacyLaunchTest {
         check("FML tweaker not doubled", LegacyLaunch.launchArgs(out).length == out.length);
         String[] other = LegacyLaunch.launchArgs(new String[] { "--tweakClass", "optifine.OptiFineTweaker" });
         check("other tweakers kept, FML added", other.length == 4 && other[1].equals("optifine.OptiFineTweaker") && other[3].equals(LegacyLaunch.FML_TWEAKER));
+        // v1.3.3: the bake percent-encodes the quick play world folder (UTF-8) so the JVM argument is ASCII
+        String w = "My World caf" + (char) 0xe9 + " " + (char) 0x4e16 + "%+";
+        check("quick play folder: percent-encoded UTF-8 decodes back", LegacyQuickPlay.decode("My%20World%20caf%C3%A9%20%E4%B8%96%25%2B").equals(w));
+        check("quick play folder: plain ASCII and a stray % pass through", LegacyQuickPlay.decode("amber-worldtest").equals("amber-worldtest") && LegacyQuickPlay.decode("a%zz%4").equals("a%zz%4"));
+        check("quick play: main menu = GuiMainMenu (or subclass) / GuiCustom only", !LegacyQuickPlay.mainMenu(new Object()));
         check("json string escaping", LegacyProblems.str("a\"b\\c\nd\u0001").equals("\"a\\\"b\\\\c\\nd\\u0001\"") && LegacyProblems.str(null).equals("null"));
         try {
             java.io.File f = java.io.File.createTempFile("amber-problems", ".jsonl");

@@ -9,7 +9,7 @@ census run (bakes everything, loads every Mixin target). Vanilla: Fabric mod set
 warm + gc (v1.1): warm on both states; gc dry runs and refusals on both caches; gc apply only on mc/bakecli/forge-cache
 (the vanilla cache mc/ulcache-world is shared with other test states, so it only gets a dry run).
 """
-import json, os, shutil, subprocess, sys, threading, time
+import json, os, re, shutil, subprocess, sys, threading, time
 # the prototype root as the JVM sees it (tools/proto_root.py: ASCII path or its junction)
 R = subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proto_root.py')], capture_output=True, text=True, check=True).stdout.strip()
 MC = (os.environ.get('AMBER_UL_MC') or f'{R}/mc').replace(chr(92), '/'); T = f'{MC}/bakecli'; JAVA = os.environ.get('JAVA') or (f'{R}/tools/jre21/bin/java.exe' if os.path.isfile(f'{R}/tools/jre21/bin/java.exe') else shutil.which('java'))
@@ -34,7 +34,7 @@ if '--package' in sys.argv:
     ok = all(os.path.exists(f'{PKG}/bridges/{b}') for b in ('fmlbridge.jar', 'fabricbridge.jar', 'fmlbridge-forge.jar', 'fabricbridge-forge.jar', 'forgecompat.jar', 'fmlbridge-1.12.2.jar')) and MAN['javaMin'] == {'vanilla': 21, 'neoforge': 21, 'forge': 21, 'forge-1.12.2': 21} and MAN.get('javaLaunch') == {'forge-1.12.2': {'min': 8, 'max': 8}}
     print(('OK   ' if ok else 'FAIL ') + 'package: all bridge jars under bridges/, javaMin 21 per platform, javaLaunch', flush=True)
     if not ok: fails.append('package bridges/javaMin')
-    ok = MAN.get('interfaceRevision') == '1.3.2' and accepts_of(MAN.get('accepts')) == FULL_ACCEPTS
+    ok = MAN.get('interfaceRevision') == '1.3.3' and accepts_of(MAN.get('accepts')) == FULL_ACCEPTS
     print(('OK   ' if ok else 'FAIL ') + 'package manifest (v1.3.1): accepts per platform from the packaged bridges ' + str(MAN.get('accepts')), flush=True)
     if not ok: fails.append('package layout')
 else:
@@ -198,6 +198,11 @@ def forge():
     problems_file('forge launch', res[0], seen)
     # bake caches all hit, so the launch normally needs no graph at all; it must never rebuild one
     check('launch builds no mapping graph (bake caches hit; graph from the mapping cache if needed)', not any('新建' in s for s in seen if '映射图' in s), str([s for s in seen if '映射图' in s]))
+    if QP:
+        def newest():
+            d = f'{MC}/game-forge/saves'; ws = [w for w in os.listdir(d) if w.startswith('amber-qp-') and os.path.isfile(f'{d}/{w}/level.dat')] if os.path.isdir(d) else []
+            return max(ws, key=lambda w: os.path.getmtime(f'{d}/{w}/level.dat')) if ws else None
+        quickplay('forge', req, ver, mcv, f'{MC}/game-forge', ['-Damber.forgeworldtest=amber-qp'], newest)
 
 def vanilla():
     mcv = '1.21.1'; ver, ls = libs(mcv, f'{MC}/libraries')
@@ -205,8 +210,8 @@ def vanilla():
     v = [x for x in out if x['type'] == 'result']
     check('version: interface 1.3, platforms, mappingCache, javaMin 21 per platform', code == 0 and v and v[0].get('interface') == '1.3' and v[0]['platforms'].get('forge') == ['1.20.1'] and 'mappingCache' in v[0]
           and v[0].get('javaMin') == {'vanilla': 21, 'neoforge': 21, 'forge': 21, 'forge-1.12.2': 21} and v[0].get('javaLaunch') == {'forge-1.12.2': {'min': 8, 'max': 8}}, str(v))
-    check('version (v1.3.1): interfaceRevision 1.3.1, accepts per platform matches the bridges present (full build)',
-          code == 0 and v and v[0].get('interfaceRevision') == '1.3.2' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
+    check('version (v1.3.3): interfaceRevision 1.3.3, accepts per platform matches the bridges present (full build)',
+          code == 0 and v and v[0].get('interfaceRevision') == '1.3.3' and accepts_of(v[0].get('accepts')) == FULL_ACCEPTS
           and all(p['missingBridges'] == [] for p in v[0]['accepts'] if not p.get('planned')), str(v and v[0].get('accepts')))
     libv = v[0].get('libs', {}) if v else {}
     want = {n.rsplit('-', 1)[0]: n.rsplit('-', 1)[1][:-4] for n in CP_NAMES if not n.startswith('intermediary')}
@@ -240,6 +245,34 @@ def vanilla():
     ok, seen = launch('van-launch', res[0], ver, mcv, f'{MC}/game', 'TitleScreen.init', [], [])
     check('launch from the state file to the title screen', ok, str(seen[-3:]))
     problems_file('vanilla launch', res[0], seen)
+    if QP: quickplay('vanilla', req, ver, mcv, f'{MC}/game', ['-Damber.autoworld=amber-qp'], lambda: 'amber-qp' if os.path.isfile(f'{MC}/game/saves/amber-qp/level.dat') else None)
+
+def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
+    """v1.3.3 quick play on 1.20.1 / 1.21.1: a world made by the world test mod in one run is entered in the next one with
+    launch.quickPlay alone (the game's own --quickPlaySingleplayer): the title screen is never shown, nothing is clicked."""
+    code, out, err = bake('bake-instance', req); res = [x for x in out if x['type'] == 'result']
+    if not res: check(f'quickPlay {kind}: bake', False, f'{code} {err[-300:]}'); return
+    ok, seen = launch(f'{kind}-qp-create', res[0], ver, mcv, gamedir, 'joined the game', [], create_jvm)
+    world = find_world()
+    check(f'quickPlay {kind}: test world created ({world})', ok and world and os.path.isfile(f'{gamedir}/saves/{world}/level.dat'), str(seen[-3:]))
+    if not world: return
+    code, out, err = bake('bake-instance', dict(req, quickPlay={'singleplayer': world})); res = [x for x in out if x['type'] == 'result']
+    L = res[0]['launch'] if res else {}
+    check(f'quickPlay {kind}: launch.quickPlay, --quickPlaySingleplayer after the state args', code == 0 and L.get('quickPlay') == {'singleplayer': world, 'via': 'game'}
+          and L['gameArgsPrefix'][-2:] == ['--quickPlaySingleplayer', world] and L['gameArgsPrefix'][:3][0] == '--state', f'{code} {L.get("gameArgsPrefix")} {out[-1:]}')
+    check(f'quickPlay {kind}: only quickPlay changed -> every bake reused (bakeMisses 0)', res and res[0].get('stats', {}).get('bakeMisses') == 0, str(res and res[0].get('stats')))
+    if not res: return
+    t = time.time(); ok, seen = launch(f'{kind}-qp', res[0], ver, mcv, gamedir, 'joined the game', [], [])
+    log = open(f'{T}/{kind}-qp.log', encoding='utf-8', errors='replace').read()
+    check(f'quickPlay {kind}: straight into world {world} ({time.time() - t:.0f} s), title screen never opened, the quick play hook ran', ok and 'TitleScreen.init' not in log
+          and re.search(r'\[amber-ul\] @\d+ ms .*QuickPlay', log) is not None
+          and not any(m in log for m in ('[amber-worldtest] creating world', '[amber-worldtest] opening existing', '[amber-fwt] title screen')), str(seen[-3:]))
+    code, out, err = bake('bake-instance', dict(req, quickPlay={'multiplayer': '[::1]:25566'})); res = [x for x in out if x['type'] == 'result']
+    check(f'quickPlay {kind}: multiplayer -> --quickPlayMultiplayer [::1]:25566 (block only, no server started)', code == 0 and res and res[0]['launch']['gameArgsPrefix'][-2:] == ['--quickPlayMultiplayer', '[::1]:25566'], f'{code} {out[-1:]}')
+    code, out, err = bake('bake-instance', dict(req, quickPlay={'singleplayer': 'no-such-world'}))
+    check(f'quickPlay {kind}: missing world -> bad_request before any bake', code == 1 and any(x.get('code') == 'bad_request' for x in out), f'{code} {out[-1:]}')
+
+QP = any(a == 'quickplay' for a in sys.argv[1:]) or next((a for a in sys.argv[1:] if not a.startswith('--')), 'all') == 'all'
 
 def tree(root):
     out = {}
@@ -289,7 +322,7 @@ def sandbox():
     code, out, err = bake('warm', {'schema': 'amber-ul/warm-request@1', 'stateFile': sf})
     check('sandbox: warm afterwards rebuilds the jar in the shared cache', code == 0 and os.path.exists(baked[0]), f'{code} {err[-300:]}')
 
-what = next((a for a in sys.argv[1:] if not a.startswith('--')), 'all')
+what = next((a for a in sys.argv[1:] if not a.startswith('--') and a != 'quickplay'), 'all')
 if what in ('vanilla', 'all'): vanilla()
 if what in ('forge', 'all'): forge()
 if what in ('sandbox', 'all'): sandbox()
