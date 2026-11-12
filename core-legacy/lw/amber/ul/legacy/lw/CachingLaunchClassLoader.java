@@ -106,7 +106,9 @@ public class CachingLaunchClassLoader extends LaunchClassLoader {
         // The game writes into its own inputs: default configs, registry dumps (FantasticLib's config/.../reference/*.txt,
         // in a new order every start), jars extracted into mods/memory_repo. Every state the running game leaves behind is
         // recorded as an alias of this run's key (aliases.txt), so the next start finds the same cache; a state nobody
-        // wrote during a run (the user edited a config, added a mod) has no alias and gets its own key.
+        // wrote during a run (the user edited a config, added a mod) has no alias and gets its own key. Only the loading
+        // phase counts: once FML reports AVAILABLE (main menu) one last state is recorded and recording stops, so a config
+        // edited in-game or by hand while the game runs is a new key on the next start, not an alias.
         final File aliasFile = new File(cacheDir, "aliases.txt");
         final Map<String, String> aliases = new HashMap<String, String>();
         if (aliasFile.isFile()) try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(aliasFile), StandardCharsets.UTF_8))) {
@@ -126,14 +128,18 @@ public class CachingLaunchClassLoader extends LaunchClassLoader {
             @Override public void run() { self.closeCache(); }
         });
         System.err.println("[amber-ul legacy] transformer cache " + file + ": " + entries.size() + " classes");
-        // stats.txt next to the cache, every 2 s: a test harness that kills the game (no shutdown hook) still sees the numbers
-        final File stats = new File(cacheDir, "stats.txt");
-        Thread t = new Thread("amber-ul legacy cache stats") {
+        // with cacheDebug, stats.txt next to the cache every 2 s: a test harness that kills the game (no shutdown hook)
+        // still sees the numbers; without it the thread ends with the loading phase
+        final File stats = DEBUG != null ? new File(cacheDir, "stats.txt") : null;
+        Thread t = new Thread("amber-ul legacy cache aliases") {
             @Override public void run() {
                 String lastStamp = stamp(gd);
-                while (true) {
+                boolean recording = true;
+                while (recording || stats != null) {
                     try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
-                    String st = stamp(gd);
+                    boolean last = recording && self.loadingDone();
+                    String st = recording ? stamp(gd) : lastStamp;
+                    if (last) { recording = false; System.err.println("[amber-ul legacy] loading finished: no more cache aliases this run"); }
                     if (!st.equals(lastStamp)) try {
                         lastStamp = st;
                         String k = environmentKey(srcs, gd); if (DEBUG != null) DEBUG.setLength(0);
@@ -142,13 +148,24 @@ public class CachingLaunchClassLoader extends LaunchClassLoader {
                             try (Writer w = new OutputStreamWriter(new FileOutputStream(aliasFile, true), StandardCharsets.UTF_8)) { w.write(k + "\t" + env + "\n"); }
                         }
                     } catch (Exception ignored) { }
-                    try (Writer w = new OutputStreamWriter(new FileOutputStream(stats), StandardCharsets.UTF_8)) {
+                    if (stats != null) try (Writer w = new OutputStreamWriter(new FileOutputStream(stats), StandardCharsets.UTF_8)) {
                         w.write(String.format("file=%s%nloaded=%d%nhits=%d%nhitMs=%.0f%nmisses=%d%nmissMs=%.0f%nstored=%d%nlive=%d%nverified=%d%ndiffered=%d%nsessionOnly=%d%nfirstCalls=%d%n", self.file.getName(), self.entries.size(), self.hits, self.hitNanos / 1e6, self.misses, self.missNanos / 1e6, self.stored, self.live, self.verified, self.differed, self.sessionOnly, self.firstCalls));
                     } catch (IOException ignored) { }
                 }
             }
         };
         t.setDaemon(true); t.start();
+    }
+
+    /** FML has reached LoaderState.AVAILABLE (all mods loaded, main menu next). Only looks at classes already loaded. */
+    boolean loadingDone() {
+        try {
+            Class<?> loader = findLoadedClass("net.minecraftforge.fml.common.Loader"), state = findLoadedClass("net.minecraftforge.fml.common.LoaderState");
+            if (loader == null || state == null) return false;
+            Object inst = loader.getMethod("instance").invoke(null);
+            @SuppressWarnings({ "unchecked", "rawtypes" }) Object available = Enum.valueOf((Class) state, "AVAILABLE");
+            return Boolean.TRUE.equals(loader.getMethod("hasReachedState", state).invoke(inst, available));
+        } catch (Throwable e) { return false; }
     }
 
     private Object field(String name) throws Exception {

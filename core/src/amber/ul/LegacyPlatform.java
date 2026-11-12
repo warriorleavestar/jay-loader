@@ -38,16 +38,25 @@ final class LegacyPlatform {
         Path versionJson = installDir.resolve("version.json");
         if (!Files.isRegularFile(versionJson)) { Bake.error("bad_platform", "platform.installDir has no version.json (Forge 1.12.2's, from the installer)"); return 1; }
         JsonObject fv = JsonParser.parseString(Files.readString(versionJson, StandardCharsets.UTF_8)).getAsJsonObject();
-        if (!fv.has("mainClass") || !fv.get("mainClass").getAsString().equals("net.minecraft.launchwrapper.Launch")) { Bake.error("bad_platform", "version.json is not a LaunchWrapper (Forge 1.12.2) profile"); return 1; }
+        String why = profileProblem(fv);
+        if (why != null) { Bake.error("bad_platform", why); return 1; }
+        // FML's own check of the Minecraft jar's signature stays on (the cache keeps the jar's signers), and the game jar
+        // must be Mojang's 1.12.2 client: bake-instance refuses anything else
+        String gameSha1 = sha1(game);
+        if (!CLIENT_1122_SHA1.equals(gameSha1)) { Bake.error("bad_request", "gameJar is not Minecraft 1.12.2's client jar (sha1 " + gameSha1 + ", expected " + CLIENT_1122_SHA1 + ")"); return 1; }
 
         // the Forge libraries, in the profile's order, all present
         List<Path> forgeLibs = new ArrayList<>(); List<String> missing = new ArrayList<>();
+        Path libDir = installDir.resolve("libraries").toAbsolutePath().normalize();
         for (JsonElement e : fv.getAsJsonArray("libraries")) {
             JsonObject lib = e.getAsJsonObject();
             if (lib.has("clientreq") && !lib.get("clientreq").getAsBoolean()) continue;   // server-only (old-style profiles); may also be omitted
-            String rel = lib.has("downloads") && lib.getAsJsonObject("downloads").has("artifact") ? lib.getAsJsonObject("downloads").getAsJsonObject("artifact").get("path").getAsString() : mavenPath(lib.get("name").getAsString());
-            Path p = installDir.resolve("libraries").resolve(rel.replace('/', File.separatorChar));
-            if (Files.isRegularFile(p)) forgeLibs.add(p); else missing.add(rel);
+            Path p;
+            try {
+                String rel = lib.has("downloads") && lib.getAsJsonObject("downloads").has("artifact") ? lib.getAsJsonObject("downloads").getAsJsonObject("artifact").get("path").getAsString() : mavenPath(lib.get("name").getAsString());
+                p = libraryPath(libDir, rel);
+            } catch (RuntimeException ex) { Bake.error("bad_platform", "version.json library entry rejected: " + ex.getMessage()); return 1; }
+            if (Files.isRegularFile(p)) forgeLibs.add(p); else missing.add(libDir.relativize(p).toString().replace(File.separatorChar, '/'));
         }
         if (!missing.isEmpty()) { Bake.error("bad_platform", "Forge libraries missing under " + installDir.resolve("libraries") + ": " + missing); return 1; }
 
@@ -60,12 +69,20 @@ final class LegacyPlatform {
             try { mods.addAll(LegacyForgeMeta.read(j)); }
             catch (Exception ex) { Bake.problem("error", "bad_metadata", null, j.toString(), null, j.getFileName() + ": " + ex.getMessage()); bad++; }
         }
+        // ContainedDeps: FML extracts these at launch and loads them unless the same file is already in mods/, so they
+        // satisfy dependencies (and are checked themselves) but never count as duplicates of a top-level mod
+        List<ModInfo> contained = new ArrayList<>();
+        for (Path j : modJars) {
+            try { contained.addAll(LegacyForgeMeta.readContained(j)); } catch (Exception ex) { /* reported above as bad_metadata */ }
+        }
         Map<String, ModInfo> byId = new LinkedHashMap<>();
         for (ModInfo m : mods) {
             ModInfo prev = byId.putIfAbsent(m.id, m);
             if (prev != null) { Bake.problem("error", "duplicate_mod", m.id, m.jar.toString(), null, "mod " + m.id + " is in both " + prev.jar.getFileName() + " and " + m.jar.getFileName()); bad++; }
         }
-        for (ModInfo m : mods) for (Dependency d : m.deps) {
+        List<ModInfo> checked = new ArrayList<>(mods);
+        for (ModInfo m : contained) if (byId.putIfAbsent(m.id, m) == null) checked.add(m);
+        for (ModInfo m : checked) for (Dependency d : m.deps) {
             if (!d.required() || BUILTIN.contains(d.modId().toLowerCase(Locale.ROOT))) continue;
             ModInfo t = byId.get(d.modId());
             JsonObject dep = new JsonObject(); dep.addProperty("id", d.modId()); dep.addProperty("range", d.range());
@@ -108,19 +125,21 @@ final class LegacyPlatform {
         cp.add(game.toString());
         launch.add("classpath", cp);
         JsonArray jvm = new JsonArray();
-        jvm.add("-Damber.ul.legacy.cache=" + transformerCache);
+        // the cache switch (bake-instance request "transformerCache": false): off = no -D, so LegacyLaunch starts the game
+        // exactly as the official profile does; also what a launcher should use after a crash it suspects the cache of
+        boolean cacheOn = !q.has("transformerCache") || q.get("transformerCache").getAsBoolean();
+        if (cacheOn) jvm.add("-Damber.ul.legacy.cache=" + transformerCache);
         Path problems = stateDir.resolve(RuntimeProblems.FILE);
         jvm.add("-Damber.ul.problemsFile=" + problems);
         jvm.add("-Damber.ul.loaderVersion=" + Bake.LOADER_VERSION);
         jvm.add("-Dlog4j2.formatMsgNoLookups=true");   // Forge 2860 ships log4j 2.15.0
-        jvm.add("-Dfml.ignoreInvalidMinecraftCertificates=true"); jvm.add("-Dfml.ignorePatchDiscrepancies=true");
         launch.add("jvmArgs", jvm);
         launch.add("gameArgsPrefix", new JsonArray());   // LegacyLaunch adds FML's tweaker
         launch.addProperty("javaMin", 8); launch.addProperty("javaMax", 8);
         launch.addProperty("modsDir", "mods");          // FML 1.12 loads <gameDir>/mods only
         launch.addProperty("stateFile", stateFile.toString());
         launch.addProperty("problemsFile", problems.toString());
-        JsonObject lc = new JsonObject(); lc.addProperty("transformerCache", transformerCache.toString()); launch.add("cache", lc);
+        JsonObject lc = new JsonObject(); lc.addProperty("enabled", cacheOn); lc.addProperty("transformerCache", transformerCache.toString()); launch.add("cache", lc);
         r.add("launch", launch);
         JsonObject c = new JsonObject(); c.addProperty("state", "new"); c.addProperty("warm", false); c.addProperty("transformerCache", transformerCache.toString());
         r.add("cache", c);
@@ -135,8 +154,46 @@ final class LegacyPlatform {
         return rel.subpath(0, rel.getNameCount() - 2).toString().replace('\\', '/');
     }
 
+    /** Mojang's 1.12.2 client jar (piston-meta 1.12.2.json downloads.client.sha1). */
+    static final String CLIENT_1122_SHA1 = "0f275bc1547d01fa5f56ba34bdc87d981ee12daf";
+
+    /** Null when version.json is Forge 14.23.5.x for 1.12.2 on LaunchWrapper; otherwise why not. */
+    static String profileProblem(JsonObject fv) {
+        String main = fv.has("mainClass") ? fv.get("mainClass").getAsString() : null;
+        if (!"net.minecraft.launchwrapper.Launch".equals(main)) return "version.json is not a LaunchWrapper profile (mainClass " + main + ")";
+        String inherits = fv.has("inheritsFrom") ? fv.get("inheritsFrom").getAsString() : null;
+        String id = fv.has("id") ? fv.get("id").getAsString() : "";
+        if (!"1.12.2".equals(inherits) && !id.startsWith("1.12.2-")) return "version.json is not for Minecraft 1.12.2 (inheritsFrom " + inherits + ", id " + id + ")";
+        if (!fv.has("libraries") || !fv.get("libraries").isJsonArray()) return "version.json lists no libraries";
+        for (JsonElement e : fv.getAsJsonArray("libraries")) {
+            if (!e.isJsonObject() || !e.getAsJsonObject().has("name")) continue;
+            String n = e.getAsJsonObject().get("name").getAsString();
+            if (n.startsWith("net.minecraftforge:forge:")) {
+                String v = n.substring("net.minecraftforge:forge:".length());
+                return v.startsWith("1.12.2-14.23.5.") ? null : "version.json is Forge " + v + ", not 1.12.2-14.23.5.x";
+            }
+        }
+        return "version.json has no net.minecraftforge:forge library";
+    }
+
+    /** A library's path under libraries/: relative, no "..", and still inside libDir once resolved. */
+    static Path libraryPath(Path libDir, String rel) {
+        if (rel == null || rel.isEmpty() || rel.startsWith("/") || rel.startsWith("\\") || rel.contains(":") || Arrays.asList(rel.split("[/\\\\]")).contains(".."))
+            throw new IllegalArgumentException("unsafe library path '" + rel + "'");
+        Path p = libDir.resolve(rel.replace('/', File.separatorChar)).normalize();
+        if (!p.startsWith(libDir)) throw new IllegalArgumentException("library path '" + rel + "' leaves libraries/");
+        return p;
+    }
+
+    static String sha1(Path f) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+        try (var in = Files.newInputStream(f)) { byte[] b = new byte[1 << 16]; for (int n; (n = in.read(b)) > 0; ) md.update(b, 0, n); }
+        return java.util.HexFormat.of().formatHex(md.digest());
+    }
+
     static String mavenPath(String coord) {
         String[] c = coord.split(":");
+        if (c.length < 3 || Arrays.stream(c).anyMatch(String::isEmpty)) throw new IllegalArgumentException("library name '" + coord + "' is not group:artifact:version[:classifier]");
         String cls = c.length > 3 ? "-" + c[3] : "";
         return c[0].replace('.', '/') + "/" + c[1] + "/" + c[2] + "/" + c[1] + "-" + c[2] + cls + ".jar";
     }

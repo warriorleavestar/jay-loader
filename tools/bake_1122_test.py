@@ -3,7 +3,12 @@ block on Java 8 (docs/amber-bake-interface.md, v1.3.2):
   python -I tools/bake_1122_test.py [--package] [--no-launch]
 - bake-instance on mc/1.12.2 (small mod set + the world test mod): state, launch block (Java 8, cache under the instance,
   problems file), then a cold and a warm launch into a creative flat world for 60 s; the warm one must hit the cache.
-- refusals: missing required mod -> missing_dep (exit 2); installDir without version.json / with a missing library -> bad_platform.
+  API review: aliases stop after loading (a config changed in the warm run -> new key next start), no stats.txt without
+  cacheDebug, transformerCache:false -> stock launch, unusable cache dir / bridge without the cache -> legacy_cache_disabled
+  and a stock launch, no fml.ignore* flags.
+- refusals: missing required mod -> missing_dep (exit 2), but not when another jar ships it as ContainedDeps; installDir
+  without version.json / with a missing library / an escaping library path / a short coordinate / a non-Forge-1.12.2
+  profile -> bad_platform; a gameJar that is not the 1.12.2 client -> bad_request.
 - gc: a live forge-1.12.2 state (no cacheFiles) is accepted, the old cacheRoot/legacy-1.12.2 layout is removed.
 - LegacyLaunch on Java 21: legacy_java_unsupported as an @amber-ul/problem line and in the problems file.
 Inputs from tools/fetch_1122.py (mc/1.12.2, git-ignored); everything written under mc/bake1122/.
@@ -88,7 +93,12 @@ check('classpath: bridge first, Forge universal before the game jar, no vanilla 
       and sum('launchwrapper' in c for c in L['classpath']) == 1 and sum('asm-all' in c or 'asm-debug-all' in c for c in L['classpath']) == 1, L['classpath'][:4])
 check('resolved mods include the world test mod and JEI', {'amberworldtest', 'jei'} <= {m['id'] for m in res['resolvedMods']})
 
-def launch(label, timeout=900):
+check('launch block: cache on by default, FML jar self-check kept (no fml.ignore* flags)', L['cache'].get('enabled') is True
+      and not any(a.startswith('-Dfml.ignore') for a in L['jvmArgs']), L['jvmArgs'])
+DEBUG = ['-Damber.ul.legacy.cacheDebug=true']   # stats.txt (and env-<key>.txt) next to the cache, for these checks only
+
+def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None):
+    L_ = block or L
     nat = os.path.join(T, 'natives'); shutil.rmtree(nat, ignore_errors=True); os.makedirs(nat)
     for jar, excl in natives:
         with zipfile.ZipFile(jar) as z:
@@ -97,7 +107,7 @@ def launch(label, timeout=900):
     shutil.rmtree(os.path.join(GAME, 'saves', 'amber-worldtest'), ignore_errors=True); shutil.rmtree(os.path.join(GAME, 'logs'), ignore_errors=True)
     game = ['--username', 'AmberTest', '--version', '1.12.2-forge', '--gameDir', GAME, '--assetsDir', os.path.join(B, 'assets'), '--assetIndex', '1.12',
             '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--width', '960', '--height', '540']
-    cmd = [JAVA8, '-Xmx3G', '-Djava.library.path=' + nat] + L['jvmArgs'] + ['-cp', os.pathsep.join(L['classpath']), L['mainClass']] + L['gameArgsPrefix'] + game
+    cmd = [JAVA8, '-Xmx3G', '-Djava.library.path=' + nat] + list(extra) + L_['jvmArgs'] + ['-cp', os.pathsep.join(classpath or L_['classpath']), L_['mainClass']] + L_['gameArgsPrefix'] + game
     latest = os.path.join(GAME, 'logs', 'latest.log'); t0 = time.time(); marks = {}
     with open(os.path.join(T, label + '.log'), 'w', encoding='utf-8') as lf:
         p = subprocess.Popen(cmd, cwd=GAME, stdout=lf, stderr=subprocess.STDOUT)
@@ -108,27 +118,78 @@ def launch(label, timeout=900):
                 for k, pat in {'title': r'Forge Mod Loader has successfully loaded', 'world': r'AMBER-WORLDTEST in world(?! 60)', 'world_60s': r'AMBER-WORLDTEST in world 60 s',
                                'failed': r'AMBER-WORLDTEST failed|Crash report saved|---- Minecraft Crash Report'}.items():
                     if k not in marks and re.search(pat, text): marks[k] = round(time.time() - t0, 1)
-                if 'world_60s' in marks or 'failed' in marks: break
+                if at_world and 'world' in marks: at_world(); at_world = None
+                if stop in marks or 'failed' in marks: break
+            time.sleep(3)   # one more stats.txt round (every 2 s)
         finally: p.kill(); p.wait()
     st = os.path.join(tc, 'stats.txt')
     stats = dict(l.strip().split('=', 1) for l in open(st, encoding='utf-8') if '=' in l) if os.path.exists(st) else {}
+    out = open(os.path.join(T, label + '.log'), encoding='utf-8', errors='replace').read()
+    used = re.search(r'\[amber-ul legacy\] transformer cache (.+): (\d+) classes', out)
+    stats['_file'], stats['_loaded'] = (os.path.basename(used.group(1)), int(used.group(2))) if used else (None, None)
+    stats['_log'] = out
     return marks, stats
 
 if '--no-launch' not in sys.argv:
     shutil.rmtree(tc, ignore_errors=True)
     shutil.rmtree(os.path.join(CACHE, 'legacy-1.12.2'), ignore_errors=True)   # left by the gc check of an earlier run
-    m, s = launch('cold')
+    USER_CFG = os.path.join(GAME, 'config', 'amber-user-edit.cfg')
+    if os.path.exists(USER_CFG): os.remove(USER_CFG)
+    m, s = launch('cold', extra=DEBUG)
     check(f'cold launch from the launch block: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/cold.log, {GAME}/logs/latest.log')
-    check(f'cold launch filled the cache in the instance (stored {s.get("stored")})', int(s.get('stored', 0)) > 1000, s)
-    m, s = launch('warm')
+    check(f'cold launch filled the cache in the instance (stored {s.get("stored")})', int(s.get('stored', 0)) > 1000, {k: v for k, v in s.items() if k != '_log'})
+    check('alias recording stops when loading finishes', 'loading finished: no more cache aliases' in s['_log'])
+    # API review #1: a config changed after loading (here: by the user while the game runs) is not an alias of this run
+    def user_edit():
+        os.makedirs(os.path.dirname(USER_CFG), exist_ok=True); open(USER_CFG, 'w').write('# changed by the user after loading\nB:feature=true\n')
+    m, s = launch('warm', extra=DEBUG, at_world=user_edit)
+    warm_file = s['_file']
     check(f'warm launch: title, world, 60 s {m}', 'world_60s' in m and 'failed' not in m, f'see {T}/warm.log')
-    check(f'warm launch hit the cache (hits {s.get("hits")}, misses {s.get("misses")})', int(s.get('hits', 0)) > 1000 and int(s.get('hits', 0)) > 10 * int(s.get('misses', 1)), s)
+    check(f'warm launch hit the cache (hits {s.get("hits")}, misses {s.get("misses")})', int(s.get('hits', 0)) > 1000 and int(s.get('hits', 0)) > 10 * int(s.get('misses', 1)), {k: v for k, v in s.items() if k != '_log'})
+    stats_mtime = os.path.getmtime(os.path.join(tc, 'stats.txt'))
+    m, s = launch('after-edit', stop='title')   # no cacheDebug: no stats thread after loading
+    check(f'config changed after loading -> new cache key on the next start ({warm_file} -> {s["_file"]}, {s["_loaded"]} cached classes)',
+          'title' in m and s['_file'] and s['_file'] != warm_file and s['_loaded'] == 0, {k: v for k, v in s.items() if k != '_log'})
+    check('without cacheDebug no stats.txt is written', os.path.getmtime(os.path.join(tc, 'stats.txt')) == stats_mtime)
+    os.remove(USER_CFG)
     check('nothing written under cacheRoot by the game', not any(fs for _, _, fs in os.walk(CACHE)))
+
+    # API review #3: the cache can be switched off in the bake request, and a cache that cannot be set up falls back to stock
+    code, out, err = bake('bake-instance', dict(REQ, transformerCache=False))
+    r2 = next((x for x in out if x['type'] == 'result'), None)
+    L2 = r2['launch'] if r2 else None
+    check('transformerCache:false -> launch.cache.enabled false, no cache property', code == 0 and L2 and L2['cache'].get('enabled') is False
+          and not any(a.startswith('-Damber.ul.legacy.cache=') for a in L2['jvmArgs']), L2 and L2['cache'])
+    if L2:
+        m, s = launch('cache-off', stop='title', block=L2)
+        check(f'cache off: stock LaunchWrapper reaches the title screen {m}', 'title' in m and 'failed' not in m and s['_file'] is None, f'see {T}/cache-off.log')
+    blocker = os.path.join(T, 'not-a-dir'); open(blocker, 'w').write('x')
+    L3 = dict(L, jvmArgs=[('-Damber.ul.legacy.cache=' + os.path.join(blocker, 'cache')) if a.startswith('-Damber.ul.legacy.cache=') else a for a in L['jvmArgs']])
+    m, s = launch('cache-broken', stop='title', block=L3)
+    probs3 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
+    check(f'cache dir unusable: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
+          and '@amber-ul/problem {"type":"problem"' in s['_log'] and any(p.get('code') == 'legacy_cache_disabled' and p.get('severity') == 'warning' for p in probs3), probs3)
+    nolw = os.path.join(T, 'bridge-without-cache.jar')
+    with zipfile.ZipFile(L['classpath'][0]) as zi, zipfile.ZipFile(nolw, 'w') as zo:
+        for n in zi.namelist():
+            if '/lw/' not in n: zo.writestr(n, zi.read(n))
+    m, s = launch('cache-missing', stop='title', classpath=[nolw] + L['classpath'][1:])
+    probs4 = [json.loads(l) for l in open(L['problemsFile'], encoding='utf-8')] if os.path.exists(L['problemsFile']) else []
+    check(f'bridge without the cache part: legacy_cache_disabled warning, stock launch reaches the title screen {m}', 'title' in m and 'failed' not in m
+          and any(p.get('code') == 'legacy_cache_disabled' for p in probs4), probs4)
 
 # refusals
 code, out, err = bake('bake-instance', dict(REQ, mods=[{'path': m} for m in mods if 'mixinbooter' not in os.path.basename(m).lower()]))   # UniversalTweaks requires mixinbooter
 probs = [x for x in out if x['type'] == 'problem']
 check('missing required mod -> missing_dep, exit 2', code == 2 and probs and all(p['code'] == 'missing_dep' for p in probs if p['severity'] == 'error'), f'{code} {probs[:2]} {err[-300:]}')
+# API review #5: the same mod shipped only as another jar's ContainedDeps satisfies the dependency
+mb = next(m for m in mods if 'mixinbooter' in os.path.basename(m).lower())
+carrier = os.path.join(T, 'carrier-with-contained.jar')
+with zipfile.ZipFile(carrier, 'w') as z:
+    z.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\r\nContainedDeps: ' + os.path.basename(mb) + '\r\n\r\n')
+    z.write(mb, 'META-INF/libraries/' + os.path.basename(mb))
+code, out, err = bake('bake-instance', dict(REQ, mods=[{'path': m} for m in mods if m != mb] + [{'path': carrier}]))
+check('dependency provided through ContainedDeps -> no missing_dep, exit 0', code == 0 and not any(x.get('code') == 'missing_dep' for x in out), f'{code} {[x for x in out if x["type"] == "problem"][:2]} {err[-300:]}')
 bad = os.path.join(T, 'bad-install'); shutil.rmtree(bad, ignore_errors=True); os.makedirs(bad)
 code, out, err = bake('bake-instance', dict(REQ, platform={'kind': 'forge-1.12.2', 'installDir': bad}))
 check('installDir without version.json -> bad_platform', code != 0 and any(x.get('code') == 'bad_platform' for x in out), f'{code} {out[-2:]}')
@@ -139,6 +200,21 @@ fv2 = dict(fv, libraries=fv['libraries'] + [{'name': 'example:serveronly:1.0', '
 shutil.rmtree(bad); shutil.copytree(INST, bad); json.dump(fv2, open(os.path.join(bad, 'version.json'), 'w'))
 code, out, err = bake('bake-instance', dict(REQ, platform={'kind': 'forge-1.12.2', 'installDir': bad}))
 check('a clientreq:false library may be absent', code == 0, f'{code} {out[-2:]}')
+# API review #4/#6: library paths stay under libraries/, the profile must be Forge 1.12.2 on LaunchWrapper, the game jar 1.12.2's
+def bad_install(fvx):
+    shutil.rmtree(bad, ignore_errors=True); shutil.copytree(INST, bad); json.dump(fvx, open(os.path.join(bad, 'version.json'), 'w'))
+    return bake('bake-instance', dict(REQ, platform={'kind': 'forge-1.12.2', 'installDir': bad}))
+code, out, err = bad_install(dict(fv, libraries=fv['libraries'] + [{'name': 'x:y:1', 'downloads': {'artifact': {'path': '../../../outside.jar'}}}]))
+check('library path leaving libraries/ -> bad_platform', code != 0 and any(x.get('code') == 'bad_platform' and 'rejected' in x.get('message', '') for x in out), f'{code} {out[-2:]}')
+code, out, err = bad_install(dict(fv, libraries=fv['libraries'] + [{'name': 'not-a-coordinate'}]))
+check('library name with fewer than 3 parts -> bad_platform', code != 0 and any(x.get('code') == 'bad_platform' and 'group:artifact:version' in x.get('message', '') for x in out), f'{code} {out[-2:]}')
+code, out, err = bad_install(dict(fv, mainClass='cpw.mods.modlauncher.Launcher'))
+check('version.json that is not a LaunchWrapper profile -> bad_platform', code != 0 and any(x.get('code') == 'bad_platform' and 'LaunchWrapper' in x.get('message', '') for x in out), f'{code} {out[-2:]}')
+code, out, err = bad_install(dict(fv, libraries=[l for l in fv['libraries'] if not l['name'].startswith('net.minecraftforge:forge:')]))
+check('version.json without the Forge library -> bad_platform', code != 0 and any(x.get('code') == 'bad_platform' for x in out), f'{code} {out[-2:]}')
+shutil.rmtree(bad, ignore_errors=True)
+code, out, err = bake('bake-instance', dict(REQ, gameJar=os.path.join(R, 'legacytest', 'amber-worldtest-1122.jar')))
+check('gameJar that is not the 1.12.2 client -> bad_request', code != 0 and any(x.get('code') == 'bad_request' and 'sha1' in x.get('message', '') for x in out), f'{code} {out[-2:]}')
 code, out, err = bake('bake-instance', REQ)   # back to the real install for the gc check
 
 # gc: the legacy state has no cacheFiles; an old cacheRoot/legacy-1.12.2 dir is managed
