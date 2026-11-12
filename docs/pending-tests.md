@@ -93,3 +93,8 @@
 # Forge 1.12.2（0.4.0，forge-1122）
 
 - [ ] 真机上手动：Jay 用 amber-ul-0.4.0 包建一个 Forge 1.12.2 实例（Java 8），小整合包和一个大整合包（RLCraft 或超新星帝国 2）各启动两次：第一次冷启动能进世界，第二次热启动命中 .amber-ul/legacy-1.12.2 下的转换缓存；用 Java 21 启动时看到 legacy_java_unsupported 提示
+
+# 快速进入和维护模式（0.5.0，quickplay / maintenance）
+
+- [ ] 真机上手动：Jay 用 amber-ul-0.5.0 包，在 1.21.1、Forge 1.20.1、Forge 1.12.2 各点一次"直接进世界"（quickPlay singleplayer）：不经过标题画面进入所选存档，存档显示名不变；1.12.2 再试一次直接进服务器（quickPlay multiplayer）
+- [ ] 真机上手动：对一个旧版本存档跑维护模式（1.20.1/1.21.1 先升级），进度条走完后游戏自己退出；再用半径 64 预生成，中途点取消，下次维护从中断处继续；全程没有 eula.txt、没有独立服务端
