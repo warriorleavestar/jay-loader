@@ -112,7 +112,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 - Every write goes to a temp file first and is then renamed atomically, so a killed process never leaves a corrupt cache.
 - `amber.ul.Bake version` prints:
   ```
-  {"loaderVersion":"0.3.2","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
+  {"loaderVersion":"0.4.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3",
    "supportedMc":["1.20.1","1.21.1"],
    "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
@@ -213,7 +213,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 `python -I tools/package.py` (after `bash build.sh`) writes `build/dist/amber-ul-<loaderVersion>/` and `build/dist/amber-ul-<loaderVersion>.zip` (the same folder, one top-level directory, fixed timestamps):
 
 ```
-amber-ul-0.3.2/
+amber-ul-0.4.0/
   loader.jar          the loader
   libs/*.jar          its libraries (unmodified official jars; manifest.libs gives Maven coordinates + url)
   bridges/            fmlbridge.jar, fabricbridge.jar (NeoForge 1.21.1), fmlbridge-forge.jar, fabricbridge-forge.jar
@@ -257,7 +257,7 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - Check: `python -I tools/bake_cli_test.py [--package]` (v1.3: version/requirements against the real class path, rebuilt/reused, `java_too_old`, runtime problems file; `--package` runs everything from the packaged folder; v1 request on the vanilla base + a Forge 1.20.1 platform bake launched from the returned launch block; warm on both; gc refusals, dry runs, and an apply on the test cache only, followed by a launch).
 
 
-## v1.3.2: forge-1.12.2 (additive)
+## v1.3.2: forge-1.12.2 (additive, loader 0.4.0)
 
 - New platform `forge-1.12.2` for Minecraft 1.12.2 with Forge 14.23.5.x. `accepts` lists it as available when the bridge `fmlbridge-1.12.2.jar` is present (`accepts: ["forge"]`).
 - `version` adds `javaLaunch: {"forge-1.12.2": {"min": 8, "max": 8}}`: the bake stages still run on the loader's Java 21 (`javaMin` 21), but the game must be launched on Java 8. `requirements` repeats `javaLaunch` for that platform, and the launch block carries `javaMin: 8, javaMax: 8`.

@@ -89,3 +89,7 @@
 # 沙盒启动（0.3.2，sandbox-paths）
 
 - [ ] 真机上手动：Jay 在只给实例目录写权限的沙盒里启动三个平台（共享 cacheRoot/mappingCache 只读）；能进世界，共享缓存不变，.amber-ul/cache-overlay 只在 warm 前缺东西时出现
+
+# Forge 1.12.2（0.4.0，forge-1122）
+
+- [ ] 真机上手动：Jay 用 amber-ul-0.4.0 包建一个 Forge 1.12.2 实例（Java 8），小整合包和一个大整合包（RLCraft 或超新星帝国 2）各启动两次：第一次冷启动能进世界，第二次热启动命中 .amber-ul/legacy-1.12.2 下的转换缓存；用 Java 21 启动时看到 legacy_java_unsupported 提示
