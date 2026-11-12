@@ -45,11 +45,12 @@ public final class HookTest {
             byte[] full = cls(owner, true);
             byte[] out = (byte[]) patch.invoke(null, full, owner, new AccessRules(), hooks);
             ClassNode cn = new ClassNode(); new ClassReader(out).accept(cn, 0);
-            boolean both = cn.methods.stream().filter(m -> m.name.startsWith("join")).allMatch(m -> {
+            long injected = cn.methods.stream().filter(m -> m.name.startsWith("join")).filter(m -> {
                 var first = m.instructions.getFirst();
                 while (first != null && first.getOpcode() < 0) first = first.getNext();
                 return first instanceof MethodInsnNode mi && mi.owner.equals("amber/ul/runtime/GameHooks") && mi.name.equals("quickPlay");
-            });
+            }).count();
+            boolean both = injected == 2 && cn.methods.stream().filter(m -> m.name.startsWith("join")).count() == 2;
             check(mc + ": QuickPlay.joinSingleplayerWorld / joinMultiplayerWorld get GameHooks.quickPlay() at the head", both);
             // target class present, method missing -> the bake fails loudly
             try {

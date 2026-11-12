@@ -265,7 +265,8 @@ def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     t = time.time(); ok, seen = launch(f'{kind}-qp', res[0], ver, mcv, gamedir, 'joined the game', [], [])
     log = open(f'{T}/{kind}-qp.log', encoding='utf-8', errors='replace').read()
     check(f'quickPlay {kind}: straight into world {world} ({time.time() - t:.0f} s), title screen never opened, the quick play hook ran', ok and 'TitleScreen.init' not in log
-          and re.search(r'\[amber-ul\] @\d+ ms .*QuickPlay', log) is not None
+          and re.search(r'\[amber-ul\] @\d+ ms .*QuickPlay', log) is not None and 'fabric_init_not_run' not in log
+          and not any('fabric_init_not_run' in l for l in (open(res[0]['launch']['problemsFile'], encoding='utf-8') if os.path.exists(res[0]['launch'].get('problemsFile') or '') else []))
           and not any(m in log for m in ('[amber-worldtest] creating world', '[amber-worldtest] opening existing', '[amber-fwt] title screen')), str(seen[-3:]))
     code, out, err = bake('bake-instance', dict(req, quickPlay={'multiplayer': '[::1]:25566'})); res = [x for x in out if x['type'] == 'result']
     check(f'quickPlay {kind}: multiplayer -> --quickPlayMultiplayer [::1]:25566 (block only, no server started)', code == 0 and res and res[0]['launch']['gameArgsPrefix'][-2:] == ['--quickPlayMultiplayer', '[::1]:25566'], f'{code} {out[-1:]}')
