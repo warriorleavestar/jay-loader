@@ -67,7 +67,7 @@ public final class LegacyMaintenance {
             if (!new File(dir, "level.dat").isFile()) throw new IllegalStateException("no level.dat in " + dir);
             progress("start", 0, 0, world, null);
             progress("open", 0, 1, world, null);
-            onClient(new Callable<Object>() { public Object call() throws Exception { LegacyQuickPlay.openWorld(mc, mcCls, world); return null; } });
+            onClient(new Callable<Object>() { public Object call() throws Exception { String refused = LegacyQuickPlay.openWorld(mc, mcCls, world); if (refused != null) throw new IllegalStateException("world not opened: " + refused); return null; } });
             Object server = waitForServer();
             boolean complete = pregen(server, dir);
             progress(complete ? "done" : "cancelled", 0, 0, world, complete ? null : "pregen stopped; the next maintenance run continues from here");

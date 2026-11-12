@@ -33,6 +33,7 @@ jobs:
         run: |
           CP="build/loader;build/test;$(cat build/loader-cp.txt)"
           java -cp "$CP" amber.ul.HardeningTest
+          java -cp "$CP" amber.ul.HookTest
       - name: Package
         run: python -I tools/package.py --core-only | tee package.json
       - name: Bake interface smoke test (from the package alone)

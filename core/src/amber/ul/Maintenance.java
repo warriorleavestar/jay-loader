@@ -38,7 +38,7 @@ final class Maintenance {
         if (!q.has("maintenance") || q.get("maintenance").isJsonNull()) return null;
         if (!q.get("maintenance").isJsonObject()) throw new Bake.BadRequest("maintenance must be an object: {\"world\": folder, \"upgrade\"?: bool, \"pregenRadius\"?: chunks}");
         if (q.has("quickPlay") && !q.get("quickPlay").isJsonNull()) throw new Bake.BadRequest("maintenance and quickPlay cannot be combined");
-        if (q.has("side") && !"client".equals(q.get("side").getAsString())) throw new Bake.BadRequest("maintenance runs in the game client's integrated server: side must be client");
+        if (q.has("side") && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("maintenance runs in the game client's integrated server: side must be client");
         JsonObject o = q.getAsJsonObject("maintenance");
         for (String k : o.keySet()) if (!KEYS.contains(k)) throw new Bake.BadRequest("maintenance: unknown key '" + k + "'");
         if (!o.has("world")) throw new Bake.BadRequest("maintenance needs world");
@@ -55,10 +55,8 @@ final class Maintenance {
                 throw new Bake.BadRequest("maintenance pregenRadius must be a whole number of chunks, 0-" + MAX_RADIUS);
             r = e.getAsInt();
         }
-        Path dir, dat;   // the saves folder of the --gameDir the game will run with (QuickPlay.gameDir)
-        try { dir = QuickPlay.gameDir(q).resolve("saves").resolve(w); dat = dir.resolve("level.dat"); }
-        catch (java.nio.file.InvalidPathException e) { throw new Bake.BadRequest("maintenance world '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
-        if (!Files.isRegularFile(dat)) throw new Bake.BadRequest("maintenance world '" + w + "' not found: no level.dat in " + dir);
+        // the saves folder of the --gameDir the game will run with; the folder's exact name (as quick play)
+        Path dir = QuickPlay.worldDir(q, w, "maintenance"), dat = dir.resolve("level.dat");
         int dv;
         try { dv = LevelDat.dataVersion(dat); } catch (Exception e) { throw new Bake.BadRequest("maintenance world '" + w + "': level.dat cannot be read (" + e.getMessage() + ")"); }
         int game = LevelDat.gameDataVersion(mc);

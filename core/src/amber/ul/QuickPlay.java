@@ -34,13 +34,11 @@ final class QuickPlay {
         JsonObject o = q.getAsJsonObject("quickPlay");
         boolean sp = o.has("singleplayer"), mp = o.has("multiplayer");
         if (sp == mp || o.size() != 1) throw new Bake.BadRequest("quickPlay needs exactly one of singleplayer / multiplayer");
+        if (q.has("side") && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("quickPlay starts the game client: side must be client");
         if (sp) {
             String w = string(o, "singleplayer");
             worldName(w);
-            Path dir;
-            try { dir = gameDir(q).resolve("saves").resolve(w); }
-            catch (InvalidPathException e) { throw new Bake.BadRequest("quickPlay singleplayer '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
-            if (!Files.isRegularFile(dir.resolve("level.dat"))) throw new Bake.BadRequest("quickPlay world '" + w + "' not found: no level.dat in " + dir);
+            worldDir(q, w, "quickPlay");
             nameWarnings(w, legacy);
             return new QuickPlay(w, null, 0);
         }
@@ -68,20 +66,50 @@ final class QuickPlay {
         return e.getAsString();
     }
 
-    /** The saves folder the game will use: the request's gameDir, else instanceDir (the launch must pass the same --gameDir). */
-    static Path gameDir(JsonObject q) throws Bake.BadRequest { return Path.of(q.has("gameDir") ? q.get("gameDir").getAsString() : Bake.str(q, "instanceDir")); }
+    /** The game directory the game will use: the request's gameDir, else instanceDir (the launch must pass the same --gameDir). */
+    static Path gameDir(JsonObject q) throws Bake.BadRequest {
+        String key = q.has("gameDir") && !q.get("gameDir").isJsonNull() ? "gameDir" : "instanceDir";
+        JsonElement e = q.get(key);
+        if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) throw new Bake.BadRequest(key + " must be a string");
+        try { return Path.of(e.getAsString()); }
+        catch (InvalidPathException x) { throw new Bake.BadRequest(key + " '" + e.getAsString() + "' is not a usable path: " + x.getMessage()); }
+    }
+
+    /**
+     * The world folder &lt;gameDir&gt;/saves/&lt;w&gt;, which must hold a level.dat and be named exactly w on disk: the game
+     * matches folder names exactly, while Windows (case) and macOS (Unicode normalization) would also find a near match.
+     */
+    static Path worldDir(JsonObject q, String w, String what) throws Bake.BadRequest {
+        Path saves = gameDir(q).resolve("saves"), dir;
+        try { dir = saves.resolve(w); }
+        catch (InvalidPathException e) { throw new Bake.BadRequest(what + " world '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
+        if (!Files.isRegularFile(dir.resolve("level.dat"))) throw new Bake.BadRequest(what + " world '" + w + "' not found: no level.dat in " + dir);
+        String real;
+        try { real = dir.toRealPath().getFileName().toString(); } catch (java.io.IOException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }
+        if (!real.equals(w)) throw new Bake.BadRequest(what + " world '" + w + "' not found: the folder on disk is named '" + real + "' (names must match exactly, case and Unicode form included)");
+        return dir;
+    }
 
     /** A save folder name: one path segment, as the game's world list would show it. */
     static void worldName(String w) throws Bake.BadRequest {
-        if (w == null || w.isBlank() || w.equals(".") || w.equals("..") || w.contains("/") || w.contains("\\") || w.contains(":") || w.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f))
+        if (w == null || w.isBlank() || w.equals(".") || w.equals("..") || w.contains("/") || w.contains("\\") || w.contains(":") || w.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f) || unpairedSurrogate(w))
             throw new Bake.BadRequest("quickPlay singleplayer must be a world folder name under saves/ (got '" + w + "')");
+    }
+
+    static boolean unpairedSurrogate(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isHighSurrogate(c)) { if (i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1))) i++; else return true; }
+            else if (Character.isLowSurrogate(c)) return true;
+        }
+        return false;
     }
 
     /** Warnings only: names that work here but may not survive the trip to the game. */
     static void nameWarnings(String w, boolean legacy) {
         if (w.chars().anyMatch(ch -> ch > 0x7e))
             Bake.problem("warning", "quickplay_world_name", null, null, null, legacy
-                    ? "quickPlay world '" + w + "' has non-ASCII characters: Java 8 handles file names in the system code page, so a name outside it cannot be opened"
+                    ? "quickPlay world '" + w + "' has non-ASCII characters: the loader passes it percent-encoded, but on systems whose file names are not Unicode (a non-UTF-8 locale on Linux) Java 8 may not open it"
                     : "quickPlay world '" + w + "' has non-ASCII characters: the game reads its arguments in the system code page on Windows, so a name outside it may not be found");
         if (w.startsWith("-")) Bake.problem("warning", "quickplay_world_name", null, null, null, "quickPlay world '" + w + "' starts with '-'; the game reads it as the option's value, but other tools may not");
     }
