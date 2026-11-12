@@ -6,7 +6,9 @@ import com.google.gson.*;
 import org.objectweb.asm.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.jar.*;
 
@@ -39,6 +41,31 @@ public final class LegacyForgeMeta {
         boolean b(String k) { return Boolean.TRUE.equals(values.get(k)); }
     }
 
+    /**
+     * The mods a jar ships through ContainedDeps (FML 1.12 extracts them to mods/memory_repo and loads them unless the
+     * same file is already there): nested jars named in the manifest, at the jar root or under META-INF/libraries/.
+     * One level only (FML does not recurse either); unreadable or missing entries are skipped.
+     */
+    public static List<ModInfo> readContained(Path jarPath) throws IOException {
+        List<ModInfo> out = new ArrayList<>();
+        try (JarFile jar = new JarFile(jarPath.toFile())) {
+            Manifest mf = jar.getManifest();
+            if (mf == null) return out;
+            for (String name : split(mf.getMainAttributes().getValue("ContainedDeps"), " ")) {
+                if (name.contains("/") || name.contains("\\") || name.contains("..")) continue;
+                var e = jar.getJarEntry(name); if (e == null) e = jar.getJarEntry("META-INF/libraries/" + name);
+                if (e == null || e.getSize() > 256L << 20) continue;
+                Path tmp = Files.createTempFile("amber-contained", ".jar");
+                try {
+                    try (var in = jar.getInputStream(e)) { Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING); }
+                    for (ModInfo m : read(tmp)) { ModInfo c = new ModInfo(m.id, m.version, m.kind, jarPath); c.deps.addAll(m.deps); c.raw = m.raw; c.parent = name; out.add(c); }   // reported against the outer jar
+                } catch (IOException | RuntimeException ex) { /* FML would fail on it at launch; not our call here */ }
+                finally { Files.deleteIfExists(tmp); }
+            }
+        }
+        return out;
+    }
+
     public static List<ModInfo> read(Path jarPath) throws IOException {
         try (JarFile jar = new JarFile(jarPath.toFile())) { return read(jar, jarPath); }
     }
@@ -47,14 +74,16 @@ public final class LegacyForgeMeta {
         Manifest mf = jar.getManifest();
         Attributes at = mf == null ? new Attributes() : mf.getMainAttributes();
         String coremod = blankToNull(at.getValue("FMLCorePlugin")), tweak = blankToNull(at.getValue("TweakClass"));
-        boolean cmMod = "true".equalsIgnoreCase(trim(at.getValue("FMLCorePluginContainsFMLMod")));
+        // FML 1.12 (CoreModManager) scans a coremod jar for @Mod only when the manifest has this key at all (any value),
+        // or ForceLoadAsMod; otherwise its @Mod classes are never loaded and must not count
+        boolean cmMod = at.getValue("FMLCorePluginContainsFMLMod") != null || "true".equalsIgnoreCase(trim(at.getValue("ForceLoadAsMod")));
         List<String> ats = split(at.getValue("FMLAT"), " "), contained = split(at.getValue("ContainedDeps"), " ");
 
         Map<String, JsonObject> info = new LinkedHashMap<>();
         String s = MetadataReaders.text(jar, "mcmod.info");
         if (s != null) for (JsonObject o : mcmodInfo(s)) { String id = str(o, "modid"); if (id != null) info.putIfAbsent(id, o); }
 
-        List<ModAnn> anns = scan(jar);
+        List<ModAnn> anns = coremod != null && !cmMod ? List.of() : scan(jar);
         List<ModInfo> out = new ArrayList<>();
         for (ModAnn a : anns) {
             String id = a.s("modid");

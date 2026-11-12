@@ -23,8 +23,11 @@ public final class Bake {
     public static final String INTERFACE = "1.3";
     /** Additive revision within INTERFACE (v1.3.1: `accepts`; v1.3.2: the forge-1.12.2 platform and `javaLaunch`); consumers that check `interface` keep working. */
     public static final String INTERFACE_REVISION = "1.3.2";
-    /** Java major version the loader needs, per platform (v1.3). The loader is Java 21 bytecode on every platform; it is
-     *  also what the baked launch needs, whatever the game version's own json asks for (Forge 1.20.1 asks for 17). */
+    /** Java major version the bake stages need, per platform (v1.3): the loader is Java 21 bytecode on every platform.
+     *  For vanilla, neoforge and forge it is also what the baked launch needs, whatever the game version's own json asks
+     *  for (Forge 1.20.1 asks for 17). Not for forge-1.12.2: its launch runs on JAVA_LAUNCH (Java 8). A consumer that
+     *  does not know javaLaunch never reaches forge-1.12.2 anyway: it is a platform key of its own, so a consumer that
+     *  maps Forge instances to "forge" finds 1.12.2 neither in platforms.forge nor in accepts for "forge". */
     static final Map<String, Integer> JAVA_MIN = new LinkedHashMap<>();
     static { JAVA_MIN.put("vanilla", 21); JAVA_MIN.put("neoforge", 21); JAVA_MIN.put("forge", 21); JAVA_MIN.put("forge-1.12.2", 21); }
     /** Platforms whose launch runs on a different Java than the bake stages (v1.3.2): forge-1.12.2 bakes on the loader's

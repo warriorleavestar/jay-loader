@@ -126,5 +126,57 @@ public final class LegacyForgeTest {
                 && LegacyPlatform.mavenPath("org.lwjgl.lwjgl:lwjgl-platform:2.9.4:natives-windows").endsWith("lwjgl-platform-2.9.4-natives-windows.jar")
                 && "org/ow2/asm/asm-debug-all".equals(LegacyPlatform.ga(root, root.resolve("org/ow2/asm/asm-debug-all/5.2/asm-debug-all-5.2.jar")))
                 && LegacyPlatform.ga(root.resolve("a"), root.resolve("b/c/d/e.jar")) == null);
+
+        System.out.println("API review #2: older Jay builds never see forge-1.12.2 as playable");
+        // Jay <= 659369c maps every Forge instance to "forge" (BakePlatform.KindOf) and gates on PLATFORMS["forge"] /
+        // accepts of platform "forge"; forge-1.12.2 is its own key, so those builds report 1.12.2 Forge unsupported
+        check("PLATFORMS[forge] does not cover 1.12.2", !Bake.PLATFORMS.get("forge").contains("1.12.2"));
+        boolean forgeEntry1122 = false;
+        for (JsonElement el : acc) { var o = el.getAsJsonObject(); if (o.get("platform").getAsString().equals("forge") && o.get("mc").getAsString().equals("1.12.2")) forgeEntry1122 = true; }
+        check("no accepts entry with platform forge for 1.12.2", !forgeEntry1122);
+
+        System.out.println("API review #4: library paths stay under libraries/, malformed coordinates refused");
+        Path libDir = root.resolve("libraries");
+        check("normal library path", LegacyPlatform.libraryPath(libDir, "net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar").equals(libDir.resolve("net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar")));
+        for (String bad : new String[] { "../evil.jar", "a/../../evil.jar", "/abs/x.jar", "C:/x.jar", "C:x.jar", "\\\\server\\share\\x.jar", "a\\..\\..\\x.jar" }) {
+            try { LegacyPlatform.libraryPath(libDir, bad); check("library path rejected: " + bad, false); }
+            catch (IllegalArgumentException ok) { check("library path rejected: " + bad, true); }
+        }
+        for (String bad : new String[] { "only:two", "nocolons", "a::c", "g:a:" }) {
+            try { LegacyPlatform.mavenPath(bad); check("maven coordinate rejected: " + bad, false); }
+            catch (IllegalArgumentException ok) { check("maven coordinate rejected: " + bad, true); }
+        }
+
+        System.out.println("API review #6: version.json must be a Forge 1.12.2 LaunchWrapper profile");
+        java.util.function.Function<String, JsonObject> prof = s -> JsonParser.parseString(s).getAsJsonObject();
+        String forgeLib = "{\"name\":\"net.minecraftforge:forge:1.12.2-14.23.5.2860\"}";
+        check("real profile accepted", LegacyPlatform.profileProblem(prof.apply("{\"id\":\"1.12.2-forge-14.23.5.2860\",\"inheritsFrom\":\"1.12.2\",\"mainClass\":\"net.minecraft.launchwrapper.Launch\",\"libraries\":[" + forgeLib + "]}")) == null);
+        check("other main class refused", LegacyPlatform.profileProblem(prof.apply("{\"inheritsFrom\":\"1.12.2\",\"mainClass\":\"cpw.mods.modlauncher.Launcher\",\"libraries\":[" + forgeLib + "]}")) != null);
+        check("other Minecraft refused", LegacyPlatform.profileProblem(prof.apply("{\"id\":\"1.7.10-Forge\",\"inheritsFrom\":\"1.7.10\",\"mainClass\":\"net.minecraft.launchwrapper.Launch\",\"libraries\":[" + forgeLib + "]}")) != null);
+        check("LaunchWrapper profile without Forge refused (e.g. OptiFine/LiteLoader alone)", LegacyPlatform.profileProblem(prof.apply("{\"inheritsFrom\":\"1.12.2\",\"mainClass\":\"net.minecraft.launchwrapper.Launch\",\"libraries\":[{\"name\":\"net.minecraft:launchwrapper:1.12\"}]}")) != null);
+        check("older Forge 1.12.2 build refused", LegacyPlatform.profileProblem(prof.apply("{\"inheritsFrom\":\"1.12.2\",\"mainClass\":\"net.minecraft.launchwrapper.Launch\",\"libraries\":[{\"name\":\"net.minecraftforge:forge:1.12.2-14.23.4.2705\"}]}")) != null);
+
+        System.out.println("API review #5: ContainedDeps count as installed mods");
+        byte[] innerJar; {
+            Path in = jar(root.resolve("mixinbooter-8.9.jar"), Map.of(), Map.of("zone/rong/mixinbooter/MixinBooterModContainer.class",
+                    modClass("zone/rong/mixinbooter/MB", m("modid", "mixinbooter", "version", "8.9"))));
+            innerJar = Files.readAllBytes(in); Files.delete(in);
+        }
+        Path outer = jar(root.resolve("needsmb.jar"), Map.of("ContainedDeps", "mixinbooter-8.9.jar missing.jar ../x.jar"), Map.of(
+                "n/N.class", modClass("n/N", m("modid", "needsmb", "version", "1.0", "dependencies", "required-after:mixinbooter@[8.0,)")),
+                "META-INF/libraries/mixinbooter-8.9.jar", innerJar));
+        List<ModInfo> cont = LegacyForgeMeta.readContained(outer);
+        check("nested jar under META-INF/libraries read, missing/unsafe names skipped", cont.size() == 1 && cont.get(0).id.equals("mixinbooter") && cont.get(0).version.equals("8.9"));
+        check("contained mod reported against the outer jar", cont.get(0).jar.equals(outer) && "mixinbooter-8.9.jar".equals(cont.get(0).parent));
+        Path outerRoot = jar(root.resolve("rootdep.jar"), Map.of("ContainedDeps", "mixinbooter-8.9.jar"), Map.of("mixinbooter-8.9.jar", innerJar));
+        check("nested jar at the jar root read", LegacyForgeMeta.readContained(outerRoot).size() == 1);
+        check("jar without ContainedDeps: nothing", LegacyForgeMeta.readContained(j1).isEmpty());
+
+        System.out.println("coremod @Mod classes only count with FMLCorePluginContainsFMLMod");
+        Path j7 = jar(root.resolve("cm.jar"), Map.of("FMLCorePlugin", "c.P"), Map.of("c/M.class", modClass("c/M", m("modid", "hiddenmod", "version", "1"))));
+        List<ModInfo> r7 = LegacyForgeMeta.read(j7);
+        check("FML never loads @Mod from a plain coremod jar", r7.size() == 1 && r7.get(0).id.equals("coremod:c.P"));
+        Path j8 = jar(root.resolve("cm2.jar"), Map.of("FMLCorePlugin", "c.P", "FMLCorePluginContainsFMLMod", "false"), Map.of("c/M.class", modClass("c/M", m("modid", "shownmod", "version", "1"))));
+        check("key present with any value: FML scans it (CoreModManager checks presence)", LegacyForgeMeta.read(j8).stream().anyMatch(x8 -> x8.id.equals("shownmod")));
     }
 }

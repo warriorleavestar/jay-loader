@@ -56,7 +56,9 @@ public final class LegacyProblems {
                 case '\n': sb.append("\\n"); break;
                 case '\r': sb.append("\\r"); break;
                 case '\t': sb.append("\\t"); break;
-                default: if (c < 0x20 || c == 0x2028 || c == 0x2029) sb.append(String.format("\\u%04x", (int) c)); else sb.append(c);
+                // pure ASCII: Java 8 stdout uses the platform code page (GBK, cp1252...), so anything else would reach the
+                // reader as mojibake or "?"; JSON readers turn the escapes back into the same text
+                default: if (c < 0x20 || c > 0x7e) sb.append(String.format("\\u%04x", (int) c)); else sb.append(c);
             }
         }
         return sb.append('"').toString();

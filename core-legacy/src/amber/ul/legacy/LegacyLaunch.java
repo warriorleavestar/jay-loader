@@ -61,10 +61,17 @@ public final class LegacyLaunch {
         String cache = System.getProperty(CACHE);
         if (cache != null && !cache.isEmpty()) {
             // compiled against LaunchWrapper (core-legacy/lw): reached by name so this class keeps no LaunchWrapper dependency
-            Method cached = Class.forName("amber.ul.legacy.lw.CachedLaunch").getMethod("main", String[].class, java.io.File.class);
-            try { cached.invoke(null, launchArgs(args), new java.io.File(cache)); }
-            catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
-            return;
+            Method cached;
+            try { cached = Class.forName("amber.ul.legacy.lw.CachedLaunch").getMethod("main", String[].class, java.io.File.class); }
+            catch (ClassNotFoundException | NoSuchMethodException | LinkageError e) {   // a bridge built without the LaunchWrapper part
+                LegacyProblems.report("warning", "legacy_cache_disabled", "transformer cache not in this bridge: " + e, "cacheDir", cache);
+                cached = null;
+            }
+            if (cached != null) {
+                try { cached.invoke(null, launchArgs(args), new java.io.File(cache)); }
+                catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+                return;
+            }
         }
         Method main = launch.getMethod("main", String[].class);
         try { main.invoke(null, (Object) launchArgs(args)); }

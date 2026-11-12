@@ -32,7 +32,12 @@ public final class LegacyLaunchTest {
             java.io.File f = java.io.File.createTempFile("amber-problems", ".jsonl");
             System.setProperty("amber.ul.problemsFile", f.getPath());
             LegacyProblems.open("9.9.9");
-            String line = LegacyProblems.report("error", "legacy_launch_failed", "boom \"x\"", "exception", "E", "rootCause", null);
+            String cn = "" + (char) 0x4e16 + (char) 0x754c;
+            String line = LegacyProblems.report("error", "legacy_launch_failed", "boom \"x\" " + cn, "exception", "E", "rootCause", null);
+            boolean ascii = true; for (char ch : line.toCharArray()) if (ch > 0x7e) ascii = false;
+            check("problem line is pure ASCII, non-ASCII as \\uXXXX", ascii && line.contains("boom \\\"x\\\" \\" + "u4e16\\" + "u754c"));
+            check("non-ASCII escapes, including surrogates and DEL", LegacyProblems.str(cn + (char) 0xe9 + (char) 0x7f + (char) 0xd83d + (char) 0xde00)
+                    .equals("\"\\" + "u4e16\\" + "u754c\\" + "u00e9\\" + "u007f\\" + "ud83d\\" + "ude00\""));
             java.util.List<String> lines = java.nio.file.Files.readAllLines(f.toPath(), java.nio.charset.StandardCharsets.UTF_8);
             check("problems file: launch line then the problem", lines.size() == 2 && lines.get(0).startsWith("{\"type\":\"launch\"") && lines.get(0).contains("\"loaderVersion\":\"9.9.9\"")
                     && lines.get(1).equals(line) && line.contains("\"code\":\"legacy_launch_failed\"") && line.contains("\"exception\":\"E\"") && !line.contains("rootCause"));
