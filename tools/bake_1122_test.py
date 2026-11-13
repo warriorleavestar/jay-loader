@@ -233,7 +233,7 @@ if '--no-launch' not in sys.argv:
         finally: shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
         log = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
         check(f'quickPlay singleplayer (1.12.2): main menu up -> straight into the world, no menu interaction {m}', 'world_60s' in m and 'failed' not in m
-              and 'passive (not opening a world)' in log and 'AMBER-WORLDTEST title screen, opening world' not in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-qp-caf' in log,
+              and 'AMBER-WORLDTEST passive (amber.worldtest.open=false)' in log and 'AMBER-WORLDTEST title screen, opening world' not in log and 'quick play: main menu up' in s['_log'] and 'AMBER-WORLDTEST in world folder=amber-qp-caf' in log,
               f'see {T}/quickplay.log')
         time.sleep(1); played1 = last_played(os.path.join(QWD, 'level.dat'))
         check(f'quickPlay singleplayer (1.12.2): level.dat was written back by the game while in the world (LastPlayed {played0} -> {played1})', played1 > played0)
@@ -347,6 +347,7 @@ for extra, what, msg in [({'side': 'server'}, 'side server', 'side must be clien
 IW = os.path.join(INSTD, 'saves', 'amber-qp-instdir')
 WT = os.path.join(GAME, 'saves', 'amber-worldtest', 'level.dat')
 if os.path.exists(WT): os.makedirs(IW, exist_ok=True); shutil.copy(WT, os.path.join(IW, 'level.dat'))
+else: check('quickPlay: "gameDir": null test needs the world test save (amber-worldtest has no level.dat)', False, WT)
 if os.path.exists(os.path.join(IW, 'level.dat')):
     code, out, err = bake('bake-instance', dict(REQ, gameDir=None, quickPlay={'singleplayer': 'amber-qp-instdir'}))
     rq = next((x for x in out if x['type'] == 'result'), None)
@@ -356,7 +357,8 @@ if os.path.exists(os.path.join(IW, 'level.dat')):
 shutil.rmtree(IW, ignore_errors=True)
 # a world folder that is a junction (Windows) or symlink: its own name under saves/ counts, not its target's
 JW = os.path.normpath(os.path.join(GAME, 'saves', 'amber-qp-junction'))
-if os.path.exists(WT) and os.name == 'nt' and not os.path.lexists(JW):
+if os.name == 'nt' and os.path.lexists(JW): os.rmdir(JW)   # a junction left by a run that stopped early (rmdir removes the link only)
+if os.path.exists(WT) and os.name == 'nt':
     subprocess.run(['cmd', '/c', 'mklink', '/J', JW, os.path.normpath(os.path.join(GAME, 'saves', 'amber-worldtest'))], capture_output=True)
     if not os.path.isdir(JW): check('quickPlay: a junction world folder (mklink /J failed)', False)
     else:
@@ -364,6 +366,16 @@ if os.path.exists(WT) and os.name == 'nt' and not os.path.lexists(JW):
             code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-qp-junction'}))
             check('quickPlay: a world folder that is a junction is accepted under its own name', code == 0 and any(x['type'] == 'result' for x in out), f'{code} {out[-1:]}')
         finally: os.rmdir(JW)   # removes the junction only
+# "gameDir": null is the same as no gameDir for the rest of the bake too: stateKey, launch block and where the state is written
+same = []
+for gd in ('absent', None, GAME):
+    rq_ = {k: v for k, v in REQ.items() if k != 'gameDir'} if gd == 'absent' else dict(REQ, gameDir=gd)
+    code, out, err = bake('bake-instance', rq_); r_ = next((x for x in out if x['type'] == 'result'), None)
+    same.append((code, r_ and r_['stateKey'], r_ and r_['launch']))
+sfs = [x[2] and x[2].get('stateFile') for x in same]
+check('bake-instance: "gameDir" absent, null or set gives the same stateKey and launch block, state under instanceDir/.amber-ul',
+      all(c == 0 for c, _, _ in same) and len({k for _, k, _ in same}) == 1 and same[0][2] == same[1][2] == same[2][2]
+      and os.path.normcase(os.path.dirname(sfs[0] or '')) == os.path.normcase(os.path.join(INSTD, '.amber-ul')), f'{[(c, k) for c, k, _ in same]} {sfs}')
 code, out, err = bake('bake-instance', REQ)   # back to the real install for the gc check
 
 # gc: the legacy state has no cacheFiles; an old cacheRoot/legacy-1.12.2 dir is managed

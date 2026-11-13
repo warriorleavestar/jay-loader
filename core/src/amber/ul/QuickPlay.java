@@ -86,17 +86,22 @@ final class QuickPlay {
         catch (InvalidPathException e) { throw new Bake.BadRequest(what + " world '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
         if (!Files.isRegularFile(dir.resolve("level.dat"))) throw new Bake.BadRequest(what + " world '" + w + "' not found: no level.dat in " + dir);
         // the entry's own name in saves/ (not toRealPath: a junction or symlink as saves/<w> would give its target's name)
-        String near = null; boolean exact = false;
+        String near = null, wn = nfc(w); boolean exact = false;
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(saves)) {
             for (Path p : ds) {
                 String n = p.getFileName().toString();
                 if (n.equals(w)) { exact = true; break; }
-                if (n.equalsIgnoreCase(w) || java.text.Normalizer.normalize(n, java.text.Normalizer.Form.NFC).equals(java.text.Normalizer.normalize(w, java.text.Normalizer.Form.NFC))) near = n;
+                if (nfc(n).equalsIgnoreCase(wn)) near = n;   // case and Unicode form, also both at once
             }
         } catch (java.io.IOException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }
-        if (!exact) throw new Bake.BadRequest(what + " world '" + w + "' not found: the folder on disk is named '" + near + "' (names must match exactly, case and Unicode form included)");
+        if (!exact && near == null)   // the system found it under another name (Windows: a trailing dot or space, an 8.3 short name)
+            try { near = dir.toRealPath().getFileName().toString(); } catch (java.io.IOException | RuntimeException e) { near = null; }
+        if (!exact) throw new Bake.BadRequest(what + " world '" + w + "' not found: " + (near != null && !near.equals(w) ? "the folder on disk is named '" + near + "'" : "no folder in " + saves + " is named exactly '" + w + "'")
+                + " (names must match exactly, case and Unicode form included)");
         return dir;
     }
+
+    static String nfc(String s) { return java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFC); }
 
     /** A save folder name: one path segment, as the game's world list would show it. */
     static void worldName(String w) throws Bake.BadRequest {

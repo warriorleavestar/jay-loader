@@ -237,6 +237,14 @@ def vanilla():
     check('bake-instance with a v1 request (vanilla base, Fabric mods)', code == 0 and res, f'{code} {err[-400:]}')
     if not res: return
     rebake_reused('vanilla', req)
+    # "gameDir": null is the same as no gameDir (only quickPlay reads it): same stateKey and launch block, state under instanceDir
+    same = []
+    for gd in ('absent', None):
+        code, out, err = bake('bake-instance', {k: v for k, v in req.items() if k != 'gameDir'} if gd == 'absent' else dict(req, gameDir=gd))
+        r_ = next((x for x in out if x['type'] == 'result'), None); same.append((code, r_ and r_['stateKey'], r_ and r_['launch']))
+    check('bake-instance vanilla: "gameDir" absent or null gives the same stateKey and launch block as with it, state under instanceDir/.amber-ul',
+          all(c == 0 for c, _, _ in same) and same[0][1] == same[1][1] == res[0]['stateKey'] and same[0][2] == same[1][2] == res[0]['launch']
+          and norm(os.path.dirname(res[0]['launch']['stateFile'])) == norm(f'{T}/van-inst/.amber-ul'), f'{[(c, k) for c, k, _ in same]} {res[0]["stateKey"]}')
     sf = res[0]['launch']['stateFile']; live = warm('vanilla', sf)
     code, r, out, err = gc({'cacheRoot': f'{MC}/ulcache-world', 'liveStateFiles': [sf]})   # shared cache: dry run only, never apply
     listed = {norm(x['path']) for x in r['remove']} if r else set()
@@ -264,9 +272,13 @@ def quickplay(kind, req, ver, mcv, gamedir, create_jvm, find_world):
     if not res: return
     t = time.time(); ok, seen = launch(f'{kind}-qp', res[0], ver, mcv, gamedir, 'joined the game', [], [])
     log = open(f'{T}/{kind}-qp.log', encoding='utf-8', errors='replace').read()
+    pf = res[0]['launch'].get('problemsFile') or ''; plines = []
+    if os.path.isfile(pf):
+        with open(pf, encoding='utf-8') as f: plines = [json.loads(l) for l in f if l.strip()]
+    check(f'quickPlay {kind}: this launch wrote launch.problemsFile', plines and plines[0].get('type') == 'launch' and plines[0].get('time', 0) >= t * 1000 - 2000, f'{pf} {plines[:1]}')
     check(f'quickPlay {kind}: straight into world {world} ({time.time() - t:.0f} s), title screen never opened, the quick play hook ran', ok and 'TitleScreen.init' not in log
           and re.search(r'\[amber-ul\] @\d+ ms .*QuickPlay', log) is not None and 'fabric_init_not_run' not in log
-          and not any('fabric_init_not_run' in l for l in (open(res[0]['launch']['problemsFile'], encoding='utf-8') if os.path.exists(res[0]['launch'].get('problemsFile') or '') else []))
+          and not any(p_.get('code') == 'fabric_init_not_run' for p_ in plines)
           and not any(m in log for m in ('[amber-worldtest] creating world', '[amber-worldtest] opening existing', '[amber-fwt] title screen')), str(seen[-3:]))
     code, out, err = bake('bake-instance', dict(req, quickPlay={'multiplayer': '[::1]:25566'})); res = [x for x in out if x['type'] == 'result']
     check(f'quickPlay {kind}: multiplayer -> --quickPlayMultiplayer [::1]:25566 (block only, no server started)', code == 0 and res and res[0]['launch']['gameArgsPrefix'][-2:] == ['--quickPlayMultiplayer', '[::1]:25566'], f'{code} {out[-1:]}')

@@ -32,7 +32,7 @@ public class WorldTest {
             Object player = field(mcCls, "field_71439_g").get(mc);                          // player
             // -Damber.worldtest.open=false: only report (quick play tests: the loader opens the world, nothing clicks the menu)
             if (!started && "false".equals(System.getProperty("amber.worldtest.open"))) {
-                started = true; System.out.println("AMBER-WORLDTEST title screen, passive (not opening a world)");
+                started = true; System.out.println("AMBER-WORLDTEST passive (amber.worldtest.open=false)");
             }
             if (!started && screen != null && titleScreen(screen)) {
                 started = true;
