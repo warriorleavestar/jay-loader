@@ -327,8 +327,8 @@ if '--no-launch' not in sys.argv:
             mx = max((x['loadedChunks'] for x in st), default=-1); heap = [x['heapMB'] for x in st]
             check(f'maintenance (1.12.2): paused the whole run, radius 64 = 16641 chunks: done, loaded chunks stay bounded (max {mx} <= 4000), heap {min(heap, default=0)}-{max(heap, default=0)} MB ({time.time() - t0:.0f} s, {m})',
                   m.get('exit') == 0 and steps(pr, 'done') and late and all(x['paused'] is True for x in late) and 0 < mx <= 4000, f'{tail(pr)} {st[-3:]} see {T}/maintenance-pause.log')
-            pfj = json.load(open(os.path.join(MWP, 'amber-ul-pregen.json')))
-            pop, tot = populated(MWP, pfj['centerX'], pfj['centerZ'], 63)
+            pfp = os.path.join(MWP, 'amber-ul-pregen.json'); pfj = json.load(open(pfp)) if os.path.exists(pfp) else {}
+            pop, tot = populated(MWP, pfj['centerX'], pfj['centerZ'], 63) if pfj else (0, -1)
             check(f'maintenance (1.12.2): every chunk inside the radius is populated (TerrainPopulated {pop}/{tot}; window chunks the game unloaded and the run loaded back: {st[-1].get("reloaded") if st else "?"})', tot == 127 * 127 and pop == tot)
         shutil.rmtree(MWP, ignore_errors=True)
         # a cancel made while the game is still loading is kept: the run stops before the world is opened
