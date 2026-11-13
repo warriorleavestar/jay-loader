@@ -379,6 +379,11 @@ def maintenance(kind, req, ver, mcv, gamedir, fresh_world):
     # 2. a bigger radius resumes at 625; cancel part-way; the next run continues
     code, out, err = bake('bake-instance', dict(req, maintenance={'world': w, 'pregenRadius': 24})); res = [x for x in out if x['type'] == 'result']
     if not res: check(f'maintenance {kind}: bake radius 24', False, f'{code} {out[-1:]}'); return
+    # a link planted at the old fixed temp name, to a file outside the world: the progress saves never write through it
+    sentinel = f'{T}/{kind}-sentinel.txt'; open(sentinel, 'w').write('keep'); planted = f'{saves}/{w}/amber-ul-pregen.json.tmp'
+    if os.path.lexists(planted): os.remove(planted)
+    try: os.link(sentinel, planted)
+    except OSError: planted = None
     code, prog, log = run_maint(f'{kind}-mt-cancel', res[0], ver, mcv, gamedir, cancel_when=lambda p: p.get('step') == 'pregen' and p['done'] >= 1000)
     pf = json.load(open(pfp)); rs = steps(prog, 'resume')
     check(f'maintenance {kind}: radius 24 resumes at 625; cancel file -> stops, keeps its place ({pf.get("done")}/{pf.get("total")}), quits (exit {code})',
@@ -389,6 +394,9 @@ def maintenance(kind, req, ver, mcv, gamedir, fresh_world):
     pf = json.load(open(pfp)); rs = steps(prog, 'resume')
     check(f'maintenance {kind}: next run continues at {stopped} and finishes 2401 (exit {code})', code == 0 and rs and rs[0]['done'] == stopped and steps(prog, 'done')
           and pf.get('complete') is True and pf.get('done') == 2401, f'{tail(prog)} {pf}')
+    check(f'maintenance {kind}: a link planted at the temp name is not followed (periodic, cancel and done saves; the outside file is unchanged)',
+          planted and open(sentinel).read() == 'keep' and open(planted).read() == 'keep' and not [f for f in os.listdir(f'{saves}/{w}') if f.endswith('.tmp') and f != 'amber-ul-pregen.json.tmp'], planted)
+    if planted: os.remove(planted)
     # 3. an old save (1.12.2): the game's own upgrader first
     if os.path.isfile(f'{OLD_WORLD}/level.dat'):
         w2 = 'amber-mt-old'; prep(w2, OLD_WORLD)
@@ -433,6 +441,22 @@ def maintenance(kind, req, ver, mcv, gamedir, fresh_world):
         code, prog, log = run_maint(f'{kind}-mt-unicode', res[0], ver, mcv, gamedir, cancel_when=lambda p: p.get('step') == 'pregen' and p['done'] >= 400)
         check(f'maintenance {kind}: non-ASCII names: progress lines pure ASCII JSON with the right world name, cancel works (exit {code})', code == 0 and prog
               and all(p.get('world') == w4 and not p.get('_not_ascii') for p in prog) and steps(prog, 'cancelled') and not os.path.exists(res[0]['launch']['maintenance']['cancelFile']), f'{tail(prog)}')
+    # 6b. a failure (the progress file cannot be replaced) with the instance under the home folder: a stable reason and the
+    # file's role, no raw local path or user name in the progress lines or the problems file
+    w5 = 'amber-mt-fail'; prep(w5, f'{saves}/{fresh_world}'); os.makedirs(f'{saves}/{w5}/amber-ul-pregen.json/x', exist_ok=True)
+    code, out, err = bake('bake-instance', dict(req, maintenance={'world': w5})); res = [x for x in out if x['type'] == 'result']
+    if res:
+        home = os.path.dirname(os.path.abspath(gamedir)); user = os.path.basename(home)
+        code, prog, log = run_maint(f'{kind}-mt-fail', res[0], ver, mcv, gamedir, extra=[f'-Duser.home={home}', f'-Duser.name={user}'])
+        fl = steps(prog, 'failed'); pfile = res[0]['launch'].get('problemsFile')
+        probs = [l for l in open(pfile, encoding='utf-8', errors='replace')] if pfile and os.path.exists(pfile) else []
+        mine = [l for l in log.splitlines() if '@amber-ul/' in l] + [l for l in probs if 'maintenance_failed' in l]
+        raw = [v.lower() for v in {os.path.abspath(gamedir), os.path.abspath(gamedir).replace(BS, '/'), home, home.replace(BS, '/')}]
+        leaked = [l for l in mine if any(v in l.lower() or v.replace(BS, BS + BS) in l.lower() for v in raw)]
+        check(f'maintenance {kind}: a failed save reports a stable reason and file role, no raw local path (exit {code})', code == 0 and fl
+              and (fl[-1].get('message') or '').startswith('io_error (progress file)') and any('"reason":"io_error"' in l for l in probs) and not leaked, f'{tail(prog)} {leaked[:2]}')
+    else: check(f'maintenance {kind}: bake (failure run)', False, f'{code} {out[-1:]}')
+    shutil.rmtree(f'{saves}/{w5}', ignore_errors=True)
     shutil.rmtree(f'{saves}/{w4}', ignore_errors=True); shutil.rmtree(f'{saves}/{w3}', ignore_errors=True)
     # 7. refusals (bake only)
     import gzip, struct

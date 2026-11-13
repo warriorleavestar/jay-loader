@@ -68,8 +68,10 @@ public final class LegacyMaintenance {
                     while ((c instanceof InvocationTargetException || c instanceof ExecutionException) && c.getCause() != null) c = c.getCause();
                     if (c instanceof Cancelled) progress("cancelled", 0, 0, world, c.getMessage());
                     else {
-                        LegacyProblems.report("error", "maintenance_failed", "maintenance of world '" + world + "' failed: " + c, "world", world);
-                        progress("failed", 0, 0, world, String.valueOf(c));
+                        // a stable reason and the file's role; the detail without the home folder or user name
+                        String why = LegacyFiles.describe(c), role = LegacyFiles.role(c.getMessage());
+                        LegacyProblems.report("error", "maintenance_failed", "maintenance of world '" + world + "' failed: " + why, "world", world, "reason", LegacyFiles.reason(c), "file", role);
+                        progress("failed", 0, 0, world, why);
                     }
                     j.quitQuietly();
                 }
@@ -103,6 +105,7 @@ public final class LegacyMaintenance {
     static final class Job {
         final String world; final File cancel = cancelFile();
         Object mc; Class<?> mcCls;
+        Object menu;   // the main menu screen seen before the open (initialized on the client thread)
         Job(String world) { this.world = world; }
 
         void run() throws Throwable {
@@ -155,6 +158,7 @@ public final class LegacyMaintenance {
                 mc = inst; mcCls = m;   // from here on quit() can close the game
                 Object screen = field(inst, "field_71462_r");
                 if (screen == null || !LegacyQuickPlay.mainMenu(screen)) continue;
+                menu = screen;
                 System.out.println("[amber-ul legacy] maintenance: main menu up (" + screen.getClass().getName() + "), opening world " + world);
                 return;
             }
@@ -196,9 +200,10 @@ public final class LegacyMaintenance {
             final int cx = ((Integer) call(spawn, "func_177958_n")) >> 4, cz = ((Integer) call(spawn, "func_177952_p")) >> 4;
             File pf = new File(dir, PROGRESS_FILE);
             long done = 0;
-            if (pf.isFile()) {
-                String p = new String(Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
-                if (num(p, "centerX") == cx && num(p, "centerZ") == cz && p.contains("\"dimension\":\"minecraft:overworld\"")) done = Math.max(0, num(p, "done"));
+            if (pf.isFile()) {   // resume: same spiral (same centre) -> continue at the saved index; a file that is not valid starts over
+                String p = pf.length() > LegacyFiles.PROGRESS_MAX_BYTES ? null : new String(Files.readAllBytes(pf.toPath()), StandardCharsets.UTF_8);
+                done = LegacyFiles.resumeAt(p, cx, cz, r);
+                if (done < 0) { line("[amber-ul legacy] maintenance: the progress file is not valid, starting from the first chunk"); done = 0; }
             }
             long spawnTotal = side(spawnR), total = side(r);
             if (done > 0) progress("resume", Math.min(done, total), total, world, null);
@@ -280,10 +285,6 @@ public final class LegacyMaintenance {
             for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) m = Math.max(m, index(dx + i, dz + j));
             return m + 1;
         }
-        static long num(String json, String key) {
-            Matcher m = Pattern.compile("\"" + key + "\":(-?\\d+)").matcher(json);
-            return m.find() ? Long.parseLong(m.group(1)) : Long.MIN_VALUE;
-        }
 
         /** Chunks to disk first (saveAllChunks + flushToDisk, as /save-all flush), then the index. */
         long savedAt;   // the chunks before this spiral index are on disk (checked)
@@ -301,9 +302,7 @@ public final class LegacyMaintenance {
             savedAt = done;
             String json = "{\"schema\":\"amber-ul/pregen@1\",\"dimension\":\"minecraft:overworld\",\"centerX\":" + cx + ",\"centerZ\":" + cz + ",\"radius\":" + r
                     + ",\"done\":" + done + ",\"total\":" + side(r) + ",\"complete\":" + (done >= side(r)) + "}\n";
-            File tmp = new File(pf.getPath() + ".tmp");
-            try (OutputStream o = new FileOutputStream(tmp)) { o.write(json.getBytes(StandardCharsets.UTF_8)); }
-            Files.move(tmp.toPath(), pf.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            LegacyFiles.writeAtomically(pf, json.getBytes(StandardCharsets.UTF_8));
         }
 
         /**
@@ -329,7 +328,7 @@ public final class LegacyMaintenance {
                 return null;
             } });
         }
-        void quitQuietly() { try { quit(); } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not quit the game: " + e); haltLater(); } }
+        void quitQuietly() { try { quit(); } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not quit the game: " + LegacyFiles.mask(String.valueOf(e))); haltLater(); } }
 
         /**
          * FML's question on screen, or null: StartupQuery.pending until the client thread takes it, then the query of the
@@ -348,7 +347,11 @@ public final class LegacyMaintenance {
         static String queryText(Object q) {
             try { Object t = q.getClass().getMethod("getText").invoke(q); return t == null ? null : String.valueOf(t).replace('\n', ' '); } catch (Throwable e) { return null; }
         }
-        /** Answers FML's question with "no" (a notice has no answer, it is just closed) and takes its screen away, as its button would. */
+        /**
+         * Answers FML's question with "no" (a notice has no answer, it is just closed) and takes its screen away, as its button
+         * would. The screen field gets the main menu seen before the open, not null: with no world and no screen a client tick
+         * handles the keyboard as in game and fails on the missing player. FML then changes the screen itself on the client thread.
+         */
         void answerNo(Object q) {
             if (q == null) return;
             try { q.getClass().getMethod("setResult", boolean.class).invoke(q, false); } catch (Throwable ignored) { }   // notify(): no result to set
@@ -356,7 +359,7 @@ public final class LegacyMaintenance {
             try {   // the client thread loops while the question's screen is up; setting the field avoids GL calls off that thread
                 Object screen = field(mc, "field_71462_r");
                 for (Class<?> c = screen == null ? null : screen.getClass(); c != null; c = c.getSuperclass())
-                    if (c.getName().equals("net.minecraftforge.fml.client.GuiNotification")) { Field f = field0(mc.getClass(), "field_71462_r"); f.set(mc, null); break; }
+                    if (c.getName().equals("net.minecraftforge.fml.client.GuiNotification")) { Field f = field0(mc.getClass(), "field_71462_r"); f.set(mc, menu); break; }
             } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not close FML's question: " + e); }
         }
 
@@ -409,32 +412,26 @@ public final class LegacyMaintenance {
     }
 
     /**
-     * The first spiral index in [from, to) whose chunk has no entry in its region file (world/region/r.X.Z.mca), or -1.
-     * The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
+     * The first spiral index in [from, to) whose chunk cannot be read back from its region file (world/region/r.X.Z.mca),
+     * or -1. The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
      */
     static long firstUnsaved(File regionDir, int cx, int cz, long from, long to) throws java.io.IOException {
-        Map<String, int[]> headers = new java.util.HashMap<String, int[]>();
-        Spiral s = new Spiral();
-        for (long i = 0; i < to; i++) {
-            int[] d = s.next();
-            if (i < from) continue;
-            int x = cx + d[0], z = cz + d[1];
-            String key = (x >> 5) + "." + (z >> 5);
-            int[] h = headers.get(key);
-            if (h == null) { h = regionHeader(new File(regionDir, "r." + key + ".mca")); headers.put(key, h); }
-            if (h[(x & 31) + (z & 31) * 32] == 0) return i;
+        Map<String, LegacyFiles.Region> regions = new java.util.HashMap<String, LegacyFiles.Region>();
+        try {
+            Spiral s = new Spiral();
+            for (long i = 0; i < to; i++) {
+                int[] d = s.next();
+                if (i < from) continue;
+                int x = cx + d[0], z = cz + d[1];
+                String key = (x >> 5) + "." + (z >> 5);
+                LegacyFiles.Region g = regions.get(key);
+                if (g == null) { g = new LegacyFiles.Region(new File(regionDir, "r." + key + ".mca")); regions.put(key, g); }
+                if (!g.saved(x, z, true)) return i;
+            }
+            return -1;
+        } finally {
+            for (LegacyFiles.Region g : regions.values()) g.close();
         }
-        return -1;
-    }
-    /** The 1024 chunk location entries of a region file (0: no chunk), all 0 when there is no file. */
-    static int[] regionHeader(File f) throws java.io.IOException {
-        int[] h = new int[1024];
-        if (!f.isFile()) return h;
-        java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.io.FileInputStream(f)));
-        try { for (int i = 0; i < 1024; i++) h[i] = in.readInt(); }
-        catch (java.io.EOFException e) { /* a region file still being created: what is there */ }
-        finally { in.close(); }
-        return h;
     }
 
     /** Square spiral offsets, the same order as amber.ul.runtime.MaintenanceRun.Spiral (a progress file works on both). */

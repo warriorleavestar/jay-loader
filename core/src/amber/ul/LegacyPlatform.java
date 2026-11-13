@@ -104,7 +104,7 @@ final class LegacyPlatform {
         Path transformerCache = stateDir.resolve("legacy-1.12.2").resolve(stateKey.substring(0, 16));
         JsonObject st = new JsonObject();
         st.addProperty("schema", "amber-ul/state@1"); st.addProperty("stateKey", stateKey);
-        st.addProperty("mcVersion", mc); st.addProperty("side", q.has("side") ? q.get("side").getAsString() : "client");
+        st.addProperty("mcVersion", mc); st.addProperty("side", q.has("side") && !q.get("side").isJsonNull() ? Bake.str(q, "side") : "client");   // null counts as no side: client
         st.addProperty("gameJar", game.toString()); st.addProperty("cacheRoot", cacheRoot.toString());
         JsonObject sp = new JsonObject(); sp.addProperty("kind", KIND); sp.addProperty("installDir", installDir.toString()); st.add("platform", sp);
         JsonArray ms = new JsonArray(); modJars.forEach(m -> ms.add(m.toString())); st.add("mods", ms);

@@ -574,7 +574,12 @@ public final class Bake {
         if (!q.get("schema").getAsString().equals(want)) throw new BadRequest("unknown schema " + q.get("schema").getAsString() + " (expected " + want + ")");
         return q;
     }
-    static String str(JsonObject q, String k) throws BadRequest { if (!q.has(k)) throw new BadRequest("missing field " + k); return q.get(k).getAsString(); }
+    /** A string field; null counts as missing, anything but a string or number is a bad request. */
+    static String str(JsonObject q, String k) throws BadRequest {
+        if (!q.has(k) || q.get(k).isJsonNull()) throw new BadRequest("missing field " + k);
+        if (!q.get(k).isJsonPrimitive()) throw new BadRequest("field " + k + " is not a string");
+        return q.get(k).getAsString();
+    }
     static Path path(JsonObject q, String k) throws BadRequest { return Path.of(str(q, k)); }
     static List<Path> paths(JsonObject q, String k) { List<Path> l = new ArrayList<>(); if (q.has(k)) for (JsonElement e : q.getAsJsonArray(k)) l.add(Path.of(e.getAsString())); return l; }
 

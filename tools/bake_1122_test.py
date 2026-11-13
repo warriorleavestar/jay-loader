@@ -15,6 +15,7 @@ Inputs from tools/fetch_1122.py (mc/1.12.2, git-ignored); everything written und
 --package: the loader and bridges from build/dist (tools/package.py), as Jay ships them.
 """
 import json, os, re, shutil, subprocess, sys, threading, time, zipfile
+BS = chr(92)
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), '1.12.2'); LIB = os.path.join(B, 'libraries'); T = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), 'bake1122')
@@ -320,6 +321,11 @@ if '--no-launch' not in sys.argv:
                         if any(x.get('step') == 'pregen' and x['done'] >= 800 for x in pr_): open(cf, 'w').close(); return
                         if any(x.get('step') in ('done', 'quit', 'failed') for x in pr_): return
                 open(os.path.join(T, 'maintenance-cancel.log'), 'w').close()
+                # a link planted at the old fixed temp name, to a file outside the world: the progress saves never write through it
+                sentinel = os.path.join(T, 'sentinel.txt'); open(sentinel, 'w').write('keep'); planted = os.path.join(MWD, 'amber-ul-pregen.json.tmp')
+                if os.path.lexists(planted): os.remove(planted)
+                try: os.link(sentinel, planted)
+                except OSError: planted = None
                 threading.Thread(target=watch, daemon=True).start()
                 m, s = launch('maintenance-cancel', stop='never', timeout=1800, block=LM2, extra=['-Damber.worldtest.open=false'], keep_world=True)
                 pr = progress_of('maintenance-cancel'); pf = json.load(open(pfp))
@@ -331,6 +337,9 @@ if '--no-launch' not in sys.argv:
                 pr = progress_of('maintenance-resume'); pf = json.load(open(pfp)); rs = steps(pr, 'resume')
                 check(f'maintenance (1.12.2): next run continues at {stopped}, finishes 1681 ({m})', m.get('exit') == 0 and rs and rs[0]['done'] == stopped
                       and steps(pr, 'done') and pf.get('complete') is True and pf.get('done') == 1681, tail(pr))
+                check('maintenance (1.12.2): a link planted at the temp name is not followed (periodic, cancel and done saves; the outside file is unchanged)',
+                      planted and open(sentinel).read() == 'keep' and open(planted).read() == 'keep' and not [f for f in os.listdir(MWD) if f.endswith('.tmp') and f != 'amber-ul-pregen.json.tmp'], planted)
+                if planted: os.remove(planted)
         # paused the whole run (the pause menu, as when the window loses focus), radius 64: the sliding window keeps the
         # loaded chunks bounded, and every chunk inside the radius is populated (TerrainPopulated)
         MWP = os.path.join(GAME, 'saves', 'amber-mt-pause')
@@ -418,6 +427,25 @@ if '--no-launch' not in sys.argv:
                   m.get('exit') == 0 and cn and 'opening' in (cn[-1].get('message') or '') and not steps(pr, 'failed') and not steps(pr, 'spawn')
                   and op and not any(x['done'] == 1 for x in op) and not os.path.exists(cfq), f'{tail(pr)} {cn[-1:]}')
         shutil.rmtree(MWQD, ignore_errors=True)
+        # a failure (the progress file cannot be replaced) with the instance under the home folder: a stable reason and the
+        # file's role, no raw local path or user name in the progress lines or the problems file
+        MWF = 'amber-mt-fail'; MWFD = os.path.join(GAME, 'saves', MWF)
+        shutil.rmtree(MWFD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWFD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        os.makedirs(os.path.join(MWFD, 'amber-ul-pregen.json', 'x'))
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MWF, 'pregenRadius': 0}))
+        LF = launch_block(code, out, 'maintenance (1.12.2) failure run')
+        if LF:
+            home = os.path.dirname(os.path.abspath(GAME)); user = os.path.basename(home)
+            m, s = launch('maintenance-fail', stop='never', timeout=900, block=LF, extra=['-Damber.worldtest.open=false', '-Duser.home=' + home, '-Duser.name=' + user], keep_world=True)
+            pr = progress_of('maintenance-fail'); fl = steps(pr, 'failed'); pff = LF['problemsFile']
+            probs = [l for l in open(pff, encoding='utf-8', errors='replace')] if os.path.exists(pff) else []
+            text = open(os.path.join(T, 'maintenance-fail.log'), encoding='utf-8', errors='replace').read()
+            mine = [l for l in text.splitlines() if '@amber-ul/' in l] + [l for l in probs if 'maintenance_failed' in l]
+            raw = [v.lower() for v in {os.path.abspath(GAME), os.path.abspath(GAME).replace(BS, '/'), home, home.replace(BS, '/')}]
+            leaked = [l for l in mine if any(v in l.lower() or v.replace(BS, BS + BS) in l.lower() for v in raw)]
+            check(f'maintenance (1.12.2): a failed save reports a stable reason and file role, no raw local path ({m})', m.get('exit') == 0 and fl
+                  and (fl[-1].get('message') or '').startswith('io_error (progress file)') and any('"reason":"io_error"' in l for l in probs) and not leaked, f'{tail(pr)} {fl[-1:]} {leaked[:2]}')
+        shutil.rmtree(MWFD, ignore_errors=True)
         shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
     else: check('maintenance (1.12.2): needs the warm run world', False)
 

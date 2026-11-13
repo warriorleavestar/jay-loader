@@ -98,8 +98,10 @@ public final class MaintenanceRun {
                 if (c instanceof ExecutionException ee && ee.getCause() != null) c = ee.getCause();
                 if (c instanceof Cancelled) progress("cancelled", 0, 0, world, c.getMessage());
                 else {
-                    try { RuntimeProblems.report("error", "maintenance_failed", null, "maintenance of world '" + world + "' failed: " + c, "world", world); } catch (Throwable ignored) { }
-                    progress("failed", 0, 0, world, String.valueOf(c));
+                    // a stable reason and the file's role; the detail without the home folder or user name
+                    String why = MaintenanceFiles.describe(c), role = MaintenanceFiles.role(c.getMessage());
+                    try { RuntimeProblems.report("error", "maintenance_failed", null, "maintenance of world '" + world + "' failed: " + why, "world", world, "reason", MaintenanceFiles.reason(c), "file", role); } catch (Throwable ignored) { }
+                    progress("failed", 0, 0, world, why);
                 }
                 quitQuietly(minecraft, world);
             }
@@ -135,7 +137,7 @@ public final class MaintenanceRun {
     static void quitQuietly(Object mc, String world) {
         try { new Job(mc, world).quit(); }
         catch (Throwable e) {
-            System.err.println("[amber-ul] 维护: 退出游戏失败: " + e);
+            System.err.println("[amber-ul] 维护: 退出游戏失败: " + MaintenanceFiles.mask(String.valueOf(e)));
             try { call(mc, "stop"); } catch (Throwable ignored) { }
             haltLater();
         }
@@ -300,10 +302,12 @@ public final class MaintenanceRun {
             int cx = ((Integer) call(spawn, "getX")) >> 4, cz = ((Integer) call(spawn, "getZ")) >> 4;
             Path pf = dir.resolve(PROGRESS_FILE);
             long done = 0;
-            try {   // resume: same spiral (same centre) -> continue at the saved index
-                JsonObject p = JsonParser.parseString(Files.readString(pf, StandardCharsets.UTF_8)).getAsJsonObject();
-                if (p.get("centerX").getAsInt() == cx && p.get("centerZ").getAsInt() == cz && "minecraft:overworld".equals(p.get("dimension").getAsString())) done = Math.max(0, p.get("done").getAsLong());
-            } catch (Exception ignored) { }
+            if (Files.isRegularFile(pf)) {   // resume: same spiral (same centre) -> continue at the saved index; a file that is not valid starts over
+                String p = null;
+                try { if (Files.size(pf) <= MaintenanceFiles.PROGRESS_MAX_BYTES) p = Files.readString(pf, StandardCharsets.UTF_8); } catch (Exception ignored) { }
+                done = MaintenanceFiles.resumeAt(p, cx, cz, r);
+                if (done < 0) { System.out.println("[amber-ul] 维护: 进度文件无效, 从头开始"); done = 0; }
+            }
             long spawnTotal = side(spawnR), total = side(r);
             if (done > 0) { System.out.println("[amber-ul] 维护: 从上次的进度继续, 已完成 " + Math.min(done, total) + " / " + total + " 区块"); progress("resume", Math.min(done, total), total, world, null); }
             Spiral s = new Spiral(); for (long i = 0; i < done && i < total; i++) s.next();
@@ -353,9 +357,7 @@ public final class MaintenanceRun {
             p.addProperty("schema", "amber-ul/pregen@1"); p.addProperty("dimension", "minecraft:overworld");
             p.addProperty("centerX", cx); p.addProperty("centerZ", cz); p.addProperty("radius", r); p.addProperty("done", done); p.addProperty("total", side(r));
             p.addProperty("complete", done >= side(r));
-            Path tmp = pf.resolveSibling(PROGRESS_FILE + ".tmp");
-            Files.writeString(tmp, p + "\n", StandardCharsets.UTF_8);
-            Files.move(tmp, pf, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            MaintenanceFiles.writeAtomically(pf.toFile(), (p + "\n").getBytes(StandardCharsets.UTF_8));
         }
 
         /** Leave the world as the pause menu's "Save and Quit to Title" does, then close the game. */
@@ -399,31 +401,26 @@ public final class MaintenanceRun {
     }
 
     /**
-     * The first spiral index in [from, to) whose chunk has no entry in its region file (world/region/r.X.Z.mca), or -1.
-     * The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
+     * The first spiral index in [from, to) whose chunk cannot be read back from its region file (world/region/r.X.Z.mca),
+     * or -1. The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
      */
     public static long firstUnsaved(Path regionDir, int cx, int cz, long from, long to) throws java.io.IOException {
-        java.util.Map<String, int[]> headers = new java.util.HashMap<>();
-        Spiral s = new Spiral();
-        for (long i = 0; i < to; i++) {
-            int[] d = s.next();
-            if (i < from) continue;
-            int x = cx + d[0], z = cz + d[1];
-            String key = (x >> 5) + "." + (z >> 5);
-            int[] h = headers.get(key);
-            if (h == null) { h = regionHeader(regionDir.resolve("r." + key + ".mca")); headers.put(key, h); }
-            if (h[(x & 31) + (z & 31) * 32] == 0) return i;
+        java.util.Map<String, MaintenanceFiles.Region> regions = new java.util.HashMap<>();
+        try {
+            Spiral s = new Spiral();
+            for (long i = 0; i < to; i++) {
+                int[] d = s.next();
+                if (i < from) continue;
+                int x = cx + d[0], z = cz + d[1];
+                String key = (x >> 5) + "." + (z >> 5);
+                MaintenanceFiles.Region g = regions.get(key);
+                if (g == null) { g = new MaintenanceFiles.Region(regionDir.resolve("r." + key + ".mca").toFile()); regions.put(key, g); }
+                if (!g.saved(x, z, false)) return i;
+            }
+            return -1;
+        } finally {
+            for (MaintenanceFiles.Region g : regions.values()) g.close();
         }
-        return -1;
-    }
-    /** The 1024 chunk location entries of a region file (0: no chunk), all 0 when there is no file. */
-    static int[] regionHeader(Path f) throws java.io.IOException {
-        int[] h = new int[1024];
-        if (!Files.isRegularFile(f)) return h;
-        try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(Files.newInputStream(f)))) {
-            for (int i = 0; i < 1024; i++) h[i] = in.readInt();
-        } catch (java.io.EOFException e) { /* a region file still being created: what is there */ }
-        return h;
     }
 
     /** Square spiral offsets: (0,0), then ring 1, ring 2, ... (a prefix of a bigger spiral is a smaller one). */
