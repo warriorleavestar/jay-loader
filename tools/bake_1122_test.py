@@ -267,7 +267,7 @@ if '--no-launch' not in sys.argv:
     # radius around the world spawn in the integrated server, saves, quits; cancel file + resume
     def progress_of(label):
         out_ = open(os.path.join(T, label + '.log'), encoding='utf-8', errors='replace').read()
-        return [json.loads(l.split('@amber-ul/progress ', 1)[1]) for l in out_.splitlines() if '@amber-ul/progress {' in l]
+        return [json.JSONDecoder().raw_decode(l.split('@amber-ul/progress ', 1)[1])[0] for l in out_.splitlines() if '@amber-ul/progress {' in l]
     def steps(pr, st): return [x for x in pr if x.get('step') == st]
     def tail(pr): return [(x['step'], x['done'], x['total']) for x in pr[-5:]]
     MW = 'amber-mt'; MWD = os.path.join(GAME, 'saves', MW)
@@ -322,14 +322,14 @@ if '--no-launch' not in sys.argv:
         if LP:
             t0 = time.time(); m, s = launch('maintenance-pause', stop='never', timeout=2400, block=LP, extra=['-Damber.worldtest.open=false', '-Damber.ul.maintenance.debugPause=true', '-Damber.ul.maintenance.stats=true'], keep_world=True)
             raw = open(os.path.join(T, 'maintenance-pause.log'), encoding='utf-8', errors='replace').read()
-            st = [json.loads(l.split('@amber-ul/maintenance-stats ', 1)[1]) for l in raw.splitlines() if '@amber-ul/maintenance-stats {' in l]
+            st = [json.JSONDecoder().raw_decode(l.split('@amber-ul/maintenance-stats ', 1)[1])[0] for l in raw.splitlines() if '@amber-ul/maintenance-stats {' in l]
             pr = progress_of('maintenance-pause'); late = [x for x in st if x['done'] > 2000]
             mx = max((x['loadedChunks'] for x in st), default=-1); heap = [x['heapMB'] for x in st]
             check(f'maintenance (1.12.2): paused the whole run, radius 64 = 16641 chunks: done, loaded chunks stay bounded (max {mx} <= 4000), heap {min(heap, default=0)}-{max(heap, default=0)} MB ({time.time() - t0:.0f} s, {m})',
                   m.get('exit') == 0 and steps(pr, 'done') and late and all(x['paused'] is True for x in late) and 0 < mx <= 4000, f'{tail(pr)} {st[-3:]} see {T}/maintenance-pause.log')
             pfj = json.load(open(os.path.join(MWP, 'amber-ul-pregen.json')))
             pop, tot = populated(MWP, pfj['centerX'], pfj['centerZ'], 63)
-            check(f'maintenance (1.12.2): every chunk inside the radius is populated (TerrainPopulated {pop}/{tot})', tot == 127 * 127 and pop == tot)
+            check(f'maintenance (1.12.2): every chunk inside the radius is populated (TerrainPopulated {pop}/{tot}; window chunks the game unloaded and the run loaded back: {st[-1].get("reloaded") if st else "?"})', tot == 127 * 127 and pop == tot)
         shutil.rmtree(MWP, ignore_errors=True)
         # a cancel made while the game is still loading is kept: the run stops before the world is opened
         code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 30}))

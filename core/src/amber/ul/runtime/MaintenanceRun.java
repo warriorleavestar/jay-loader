@@ -40,6 +40,11 @@ public final class MaintenanceRun {
     private static volatile boolean started;
     /** The process's own stdout, UTF-8 (the lines are ASCII anyway), not the game's log4j-redirected System.out. */
     static final PrintStream OUT = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
+    /** One line, one write(2): other output on the same stdout (the game log) cannot land inside it. */
+    static void line(String s) {
+        byte[] b = (s + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        synchronized (OUT) { OUT.write(b, 0, b.length); OUT.flush(); }
+    }
 
     /** The bake percent-encodes the world folder and paths (UTF-8): ASCII arguments whatever the code page. */
     static String decode(String s) {
@@ -107,7 +112,7 @@ public final class MaintenanceRun {
         o.addProperty("type", "progress"); o.addProperty("schema", "amber-ul/maintenance-progress@1"); o.addProperty("stage", "maintenance");
         o.addProperty("step", step); o.addProperty("done", done); o.addProperty("total", total); o.addProperty("world", world);
         if (message != null) o.addProperty("message", message);
-        OUT.println(PREFIX + ascii(o.toString()));
+        line(PREFIX + ascii(o.toString()));
     }
     /** JSON with every non-ASCII character as a \\uXXXX escape (they only occur inside strings). */
     static String ascii(String json) {
@@ -140,7 +145,7 @@ public final class MaintenanceRun {
         long ms = Long.getLong("amber.ul.maintenance.exitWaitMs", 300_000);
         Thread t = new Thread(() -> {
             try { Thread.sleep(ms); } catch (InterruptedException e) { return; }
-            OUT.println("[amber-ul] maintenance: the game did not exit within " + ms / 1000 + " s after quitting; halting the JVM");
+            line("[amber-ul] maintenance: the game did not exit within " + ms / 1000 + " s after quitting; halting the JVM");
             Runtime.getRuntime().halt(1);
         }, "amber-ul maintenance exit watchdog");
         t.setDaemon(true); t.start();
@@ -274,6 +279,10 @@ public final class MaintenanceRun {
             throw new IllegalStateException("the world was not open within the wait (amber.ul.maintenance.openWaitMs)");
         }
 
+        /** The "has more time" of ServerChunkCache.tick: like the game's own, a time limit (with an always-true one ChunkMap.processUnloads
+         *  can run forever, an unload task re-queues itself while its chunk's save is still changing). The chunk map still unloads at least
+         *  200 chunks per call, and all queued ones above 2000. */
+        static BooleanSupplier budget() { long end = System.nanoTime() + 50_000_000L; return () -> System.nanoTime() < end; }
         /** Spawn chunks (always) then the user radius, one square spiral; true when it ran to the end. */
         boolean pregen(Object server, Path dir) throws Throwable {
             int spawnR = Integer.getInteger("amber.ul.maintenance.spawnRadius", 8), userR = Integer.getInteger("amber.ul.maintenance.radius", 0);
@@ -294,7 +303,6 @@ public final class MaintenanceRun {
             long lastLine = 0, lastSave = System.currentTimeMillis(), savedAt = done;
             int batch = Integer.getInteger("amber.ul.maintenance.batch", 16), cap = Integer.getInteger("amber.ul.maintenance.maxLoadedChunks", 6000);
             boolean stats = Boolean.getBoolean("amber.ul.maintenance.stats"), debugPause = Boolean.getBoolean("amber.ul.maintenance.debugPause");
-            BooleanSupplier always = () -> true;
             while (done < total) {
                 if (Files.exists(cancel)) { cancelled(); save(server, level, pf, cx, cz, r, done); return false; }
                 if (!Boolean.TRUE.equals(call(server, "isRunning"))) return false;   // the game was closed: the last saved index stays
@@ -305,17 +313,17 @@ public final class MaintenanceRun {
                 // (TicketType.UNKNOWN) and processes unloads, which the level tick would do but does not while paused
                 int loaded = (Integer) submit(server, () -> {
                     for (int[] c : xs) call(level, "getChunk", c[0], c[1]);
-                    call(chunks, "tick", always, false);
+                    call(chunks, "tick", budget(), false);
                     return call(chunks, "getLoadedChunksCount");
                 });
-                for (int i = 0; loaded > cap && i < 200; i++) { Thread.sleep(25); loaded = (Integer) submit(server, () -> { call(chunks, "tick", always, false); return call(chunks, "getLoadedChunksCount"); }); }
+                for (int i = 0; loaded > cap && i < 200; i++) { Thread.sleep(25); loaded = (Integer) submit(server, () -> { call(chunks, "tick", budget(), false); return call(chunks, "getLoadedChunksCount"); }); }
                 done += n;
                 long now = System.currentTimeMillis();
                 if (now - lastLine >= 1000 || done == total || done == spawnTotal) {
                     lastLine = now;
                     if (done <= spawnTotal) progress("spawn", done, spawnTotal, world, null);
                     else progress("pregen", done, total, world, null);
-                    if (stats) { Runtime rt = Runtime.getRuntime(); OUT.println("@amber-ul/maintenance-stats {\"done\":" + done + ",\"loadedChunks\":" + loaded + ",\"heapMB\":" + (rt.totalMemory() - rt.freeMemory()) / 1048576 + ",\"paused\":" + field(server, "paused") + "}"); }
+                    if (stats) { Runtime rt = Runtime.getRuntime(); line("@amber-ul/maintenance-stats {\"done\":" + done + ",\"loadedChunks\":" + loaded + ",\"heapMB\":" + (rt.totalMemory() - rt.freeMemory()) / 1048576 + ",\"paused\":" + field(server, "paused") + "}"); }
                 }
                 if (now - lastSave >= 30_000 || done - savedAt >= 4096) { save(server, level, pf, cx, cz, r, done); lastSave = now; savedAt = done; }
             }

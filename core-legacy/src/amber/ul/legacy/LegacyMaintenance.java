@@ -46,6 +46,11 @@ public final class LegacyMaintenance {
     static final String PROPERTY = "amber.ul.maintenance", PREFIX = "@amber-ul/progress ", PROGRESS_FILE = "amber-ul-pregen.json";
     /** The process's own stdout (not System.out, which FML redirects into its log), ASCII lines. */
     static final PrintStream OUT;
+    /** One line, one write(2): other output on the same stdout (the game log) cannot land inside it. */
+    static void line(String s) {
+        byte[] b = (s + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        synchronized (OUT) { OUT.write(b, 0, b.length); OUT.flush(); }
+    }
     static {
         PrintStream p;
         try { p = new PrintStream(new FileOutputStream(FileDescriptor.out), true, "UTF-8"); } catch (UnsupportedEncodingException e) { p = System.out; }
@@ -77,7 +82,7 @@ public final class LegacyMaintenance {
         StringBuilder sb = new StringBuilder("{\"type\":\"progress\",\"schema\":\"amber-ul/maintenance-progress@1\",\"stage\":\"maintenance\",\"step\":")
                 .append(LegacyProblems.str(step)).append(",\"done\":").append(done).append(",\"total\":").append(total).append(",\"world\":").append(LegacyProblems.str(world));
         if (message != null) sb.append(",\"message\":").append(LegacyProblems.str(message));
-        OUT.println(PREFIX + ascii(sb.append('}').toString()));
+        line(PREFIX + ascii(sb.append('}').toString()));
     }
     /** JSON with every non-ASCII character as a \\uXXXX escape (they only occur inside strings). */
     static String ascii(String json) {
@@ -190,6 +195,8 @@ public final class LegacyMaintenance {
                     tick = method(provider.getClass(), "func_73156_b", 0), count = method(provider.getClass(), "func_73152_e", 0);         // tick (unloads), getLoadedChunkCount
             final Object players = call(level, "func_184164_w");                                  // getPlayerChunkMap
             final Method seen = method(players.getClass(), "func_152621_a", 2);                   // PlayerChunkMap.contains(x, z)
+            final Method loadedAt = method(provider.getClass(), "func_186026_b", 2);              // getLoadedChunk (also takes the chunk out of the unload queue)
+            final long[] reloaded = { 0 };
             // the sliding window: loaded chunks of this run, each released once the spiral index passed all its neighbours
             final PriorityQueue<Object[]> held = new PriorityQueue<Object[]>(64, (a, b) -> Long.compare((Long) a[0], (Long) b[0]));
             Spiral s = new Spiral();
@@ -212,6 +219,13 @@ public final class LegacyMaintenance {
                 for (int i = 0; i < n; i++) { int[] d = s.next(); xs[i] = new int[] { cx + d[0], cz + d[1] }; }
                 final long doneAfter = done + n;
                 int loaded = (Integer) onServer(server, new Callable<Object>() { public Object call() throws Exception {
+                    // WorldServer.saveAllChunks (our saves, "Saving and pausing game", the autosave) queues every chunk no player sees for unloading,
+                    // the window too: take them out of the queue again, and load back any the game already unloaded, before new chunks are generated
+                    for (Object[] h : held) {
+                        Object c = loadedAt.invoke(provider, (Integer) h[2], (Integer) h[3]);
+                        if (c == null) { c = provide.invoke(provider, (Integer) h[2], (Integer) h[3]); reloaded[0]++; }
+                        h[1] = c;
+                    }
                     for (int[] c : xs) { Object chunk = provide.invoke(provider, c[0], c[1]); if (chunk != null) held.add(new Object[] { release(c[0] - cx, c[1] - cz), chunk, c[0], c[1] }); }
                     int queued = 0;
                     while (!held.isEmpty() && (Long) held.peek()[0] <= doneAfter) {
@@ -227,7 +241,7 @@ public final class LegacyMaintenance {
                 if (now - lastLine >= 1000 || done == total || done == spawnTotal) {
                     lastLine = now;
                     if (done <= spawnTotal) progress("spawn", done, spawnTotal, world, null); else progress("pregen", done, total, world, null);
-                    if (stats) { Runtime rt = Runtime.getRuntime(); OUT.println("@amber-ul/maintenance-stats {\"done\":" + done + ",\"loadedChunks\":" + loaded + ",\"heapMB\":" + (rt.totalMemory() - rt.freeMemory()) / 1048576 + ",\"paused\":" + field(server, "field_71348_o") + "}"); }
+                    if (stats) { Runtime rt = Runtime.getRuntime(); line("@amber-ul/maintenance-stats {\"done\":" + done + ",\"loadedChunks\":" + loaded + ",\"heapMB\":" + (rt.totalMemory() - rt.freeMemory()) / 1048576 + ",\"paused\":" + field(server, "field_71348_o") + ",\"reloaded\":" + reloaded[0] + "}"); }
                 }
                 if (now - lastSave >= 30000 || done - savedAt >= 4096) { save(server, level, pf, cx, cz, r, done); lastSave = now; savedAt = done; }
             }
@@ -340,7 +354,7 @@ public final class LegacyMaintenance {
         Thread t = new Thread("amber-ul maintenance exit watchdog") {
             @Override public void run() {
                 try { Thread.sleep(ms); } catch (InterruptedException e) { return; }
-                OUT.println("[amber-ul legacy] maintenance: the game did not exit within " + ms / 1000 + " s after quitting; halting the JVM");
+                line("[amber-ul legacy] maintenance: the game did not exit within " + ms / 1000 + " s after quitting; halting the JVM");
                 Runtime.getRuntime().halt(1);
             }
         };

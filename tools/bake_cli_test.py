@@ -302,10 +302,10 @@ def run_maint(label, res, ver, mcv, gamedir, cancel_when=None, timeout=1800, ext
         for raw in p.stdout:
             line = raw.decode('utf-8', 'replace').rstrip(); log.write(line + '\n'); log.flush()
             if stats is not None and '@amber-ul/maintenance-stats ' in line:
-                try: stats.append(json.loads(line.split('@amber-ul/maintenance-stats ', 1)[1]))
+                try: stats.append(json.JSONDecoder().raw_decode(line.split('@amber-ul/maintenance-stats ', 1)[1])[0])
                 except ValueError: pass
             if '@amber-ul/progress ' in line:
-                try: o = json.loads(line.split('@amber-ul/progress ', 1)[1])
+                try: o = json.JSONDecoder().raw_decode(line.split('@amber-ul/progress ', 1)[1])[0]
                 except ValueError: continue
                 if not line.split('@amber-ul/progress ', 1)[1].isascii(): o['_not_ascii'] = True
                 prog.append(o)
