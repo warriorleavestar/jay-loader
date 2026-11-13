@@ -24,6 +24,26 @@ public final class LegacyLaunchTest {
             }
             check("maintenance: release() comes after every neighbour", rel);
         }
+        try {   // the save check reads the region headers: radius 1 around chunk (0,0), 9 chunks over four region files
+            java.io.File rd = java.nio.file.Files.createTempDirectory("amber-region").toFile();
+            check("maintenance: no region files: the first chunk is not saved", LegacyMaintenance.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            java.util.Map<String, int[]> heads = new java.util.HashMap<String, int[]>(); int[][] sp = { {0,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}, {0,1}, {-1,1}, {-1,0} };
+            for (int i = 0; i < 9; i++) if (i != 5) {
+                int x = sp[i][0], z = sp[i][1]; String k = (x >> 5) + "." + (z >> 5);
+                if (!heads.containsKey(k)) heads.put(k, new int[1024]);
+                heads.get(k)[(x & 31) + (z & 31) * 32] = 0x201;
+            }
+            for (java.util.Map.Entry<String, int[]> e : heads.entrySet()) {
+                java.io.DataOutputStream o = new java.io.DataOutputStream(new java.io.FileOutputStream(new java.io.File(rd, "r." + e.getKey() + ".mca")));
+                for (int v : e.getValue()) o.writeInt(v);
+                o.write(new byte[4096]); o.close();
+            }
+            check("maintenance: one chunk without a region entry: its spiral index", LegacyMaintenance.firstUnsaved(rd, 0, 0, 0, 9) == 5);
+            check("maintenance: the range after it is all saved", LegacyMaintenance.firstUnsaved(rd, 0, 0, 6, 9) == -1);
+            java.io.FileOutputStream cut = new java.io.FileOutputStream(new java.io.File(rd, "r.0.0.mca")); cut.write(new byte[10]); cut.close();
+            check("maintenance: a region file cut short counts as not saved", LegacyMaintenance.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            for (java.io.File f : rd.listFiles()) f.delete(); rd.delete();
+        } catch (java.io.IOException e) { check("maintenance: region check test: " + e, false); }
         check("javaMajor 1.8", LegacyLaunch.javaMajor("1.8") == 8);
         check("javaMajor 17", LegacyLaunch.javaMajor("17") == 17);
         check("javaMajor 21.0.2", LegacyLaunch.javaMajor("21.0.2") == 21);

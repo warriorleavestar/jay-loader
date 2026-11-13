@@ -120,8 +120,15 @@ public final class LegacyMaintenance {
                 throw new IllegalStateException("the game's saves folder is not the one the bake checked: " + dir + " vs " + LegacyQuickPlay.decode(expected) + " (the launch must pass the request's gameDir as --gameDir)");
             progress("start", 0, 0, world, null);
             progress("open", 0, 1, world, null);
-            onClient(new Callable<Object>() { public Object call() throws Exception { String refused = LegacyQuickPlay.openWorld(mc, mcCls, world); if (refused != null) throw new IllegalStateException("world not opened: " + refused); return null; } });
-            Object server = waitForServer();
+            // launchIntegratedServer runs on the client thread until the server is up, and waits there for FML's questions
+            // (missing mods or blocks, an old save): the open is not waited for, waitForServer watches it with cancel and the deadline
+            long t0 = System.currentTimeMillis();
+            final Throwable[] openErr = new Throwable[1];
+            Future<?> opening = post(mc, new Runnable() { public void run() {
+                try { String refused = LegacyQuickPlay.openWorld(mc, mcCls, world); if (refused != null) openErr[0] = new IllegalStateException("world not opened: " + refused); }
+                catch (Throwable e) { openErr[0] = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e; }
+            } });
+            Object server = waitForServer(opening, openErr, t0);
             boolean complete;
             try { complete = pregen(server, dir); }
             catch (ServerGone e) { complete = false; }
@@ -154,24 +161,29 @@ public final class LegacyMaintenance {
             throw new IllegalStateException("no main menu within " + LegacyQuickPlay.WAIT_MS / 1000 + " s");
         }
 
-        Object waitForServer() throws Throwable {
-            long t0 = System.currentTimeMillis(), until = t0 + Long.getLong("amber.ul.maintenance.openWaitMs", 30L * 60 * 1000), askedSince = -1;
+        Object waitForServer(Future<?> opening, Throwable[] openErr, long t0) throws Throwable {
+            long until = t0 + Long.getLong("amber.ul.maintenance.openWaitMs", 30L * 60 * 1000), askedSince = -1;
             while (System.currentTimeMillis() < until) {
                 Thread.sleep(250);
+                if (opening.isDone() && openErr[0] != null) throw openErr[0];
                 Object server = mcCls.getMethod("func_71401_C").invoke(mc);                       // getIntegratedServer
                 if (server != null && Boolean.TRUE.equals(call(server, "func_71278_l")) && field(mc, "field_71439_g") != null && field(mc, "field_71441_e") != null) {
                     progress("open", 1, 1, world, null);
                     return server;
                 }
-                checkCancel("while the world was opening");
+                if (cancel.exists()) { answerNo(activeQuery()); checkCancel("while the world was opening"); }
                 Object screen = field(mc, "field_71462_r");
-                if (server == null && screen != null && LegacyQuickPlay.mainMenu(screen) && System.currentTimeMillis() - t0 > 60_000)
+                if (server == null && screen != null && opening.isDone() && LegacyQuickPlay.mainMenu(screen) && System.currentTimeMillis() - t0 > 60_000)
                     throw new IllegalStateException("the game did not open the world (back on the main menu; see the game log)");
                 // FML asks the player (StartupQuery: missing mods or blocks, an old save) and the server thread waits for the answer
-                if (pendingQuery() != null) {
+                Object q = activeQuery();
+                if (q != null) {
                     if (askedSince < 0) askedSince = System.currentTimeMillis();
-                    else if (System.currentTimeMillis() - askedSince > 60_000)
-                        throw new IllegalStateException("FML is asking something before it opens the world (" + (screen == null ? "?" : screen.getClass().getName()) + "); open the world in the game once, then run maintenance again");
+                    else if (System.currentTimeMillis() - askedSince > 60_000) {
+                        String text = queryText(q);
+                        answerNo(q);
+                        throw new IllegalStateException("FML is asking something before it opens the world (" + (screen == null ? "?" : screen.getClass().getName()) + "); open the world in the game once, then run maintenance again" + (text == null ? "" : ": " + text));
+                    }
                 } else askedSince = -1;
             }
             throw new IllegalStateException("the world was not open within the wait (amber.ul.maintenance.openWaitMs)");
@@ -207,7 +219,7 @@ public final class LegacyMaintenance {
                 for (int[] c : reload) { Object chunk = provide.invoke(provider, c[0], c[1]); if (chunk != null) held.add(new Object[] { release(c[0] - cx, c[1] - cz), chunk, c[0], c[1] }); }
                 return null;
             } });
-            long lastLine = 0, lastSave = System.currentTimeMillis(), savedAt = done;
+            long lastLine = 0, lastSave = System.currentTimeMillis(); savedAt = done;
             int batch = Integer.getInteger("amber.ul.maintenance.batch", 16), cap = Integer.getInteger("amber.ul.maintenance.maxLoadedChunks", 30000);
             boolean stats = Boolean.getBoolean("amber.ul.maintenance.stats"), debugPause = Boolean.getBoolean("amber.ul.maintenance.debugPause");
             while (done < total) {
@@ -274,6 +286,7 @@ public final class LegacyMaintenance {
         }
 
         /** Chunks to disk first (saveAllChunks + flushToDisk, as /save-all flush), then the index. */
+        long savedAt;   // the chunks before this spiral index are on disk (checked)
         void save(Object server, final Object level, File pf, int cx, int cz, int r, long done) throws Throwable {
             if (Boolean.TRUE.equals(field(level, "field_73058_d"))) throw new IllegalStateException("saving is turned off in this world (/save-off): the chunks would not reach the disk");   // disableLevelSaving
             final Method sac = method2(level.getClass(), "func_73044_a");                      // saveAllChunks(all, progress)
@@ -282,6 +295,10 @@ public final class LegacyMaintenance {
                 call0(level, "func_104140_m");                                                  // flushToDisk
                 return null;
             } });
+            // the progress file only moves past chunks that are in their region files: a failed write is only logged by the game
+            long missing = firstUnsaved(new File(pf.getParentFile(), "region"), cx, cz, savedAt, done);
+            if (missing >= 0) throw new IllegalStateException("chunks were not saved (the first at spiral index " + missing + "; see the game log): the progress file stays at " + savedAt + ", the next run generates them again");
+            savedAt = done;
             String json = "{\"schema\":\"amber-ul/pregen@1\",\"dimension\":\"minecraft:overworld\",\"centerX\":" + cx + ",\"centerZ\":" + cz + ",\"radius\":" + r
                     + ",\"done\":" + done + ",\"total\":" + side(r) + ",\"complete\":" + (done >= side(r)) + "}\n";
             File tmp = new File(pf.getPath() + ".tmp");
@@ -306,14 +323,42 @@ public final class LegacyMaintenance {
                 if (m != null) { mcCls = m; mc = m.getMethod("func_71410_x").invoke(null); }
                 if (mc == null) return;
             }
-            Object q = pendingQuery();
-            if (q != null) { q.getClass().getMethod("setResult", boolean.class).invoke(q, false); q.getClass().getMethod("finish").invoke(q); }
+            answerNo(activeQuery());   // a question on screen keeps the client thread from running the shutdown below
             onClient(new Callable<Object>() { public Object call() throws Exception {
                 mcCls.getMethod("func_71400_g").invoke(mc);                                     // shutdown
                 return null;
             } });
         }
         void quitQuietly() { try { quit(); } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not quit the game: " + e); haltLater(); } }
+
+        /**
+         * FML's question on screen, or null: StartupQuery.pending until the client thread takes it, then the query of the
+         * GuiNotification / GuiConfirmation it shows (FMLClientHandler.queryUser waits while that screen is up).
+         */
+        Object activeQuery() {
+            Object q = pendingQuery();
+            if (q != null || mc == null) return q;
+            try {
+                Object screen = field(mc, "field_71462_r");
+                for (Class<?> c = screen == null ? null : screen.getClass(); c != null; c = c.getSuperclass())
+                    if (c.getName().equals("net.minecraftforge.fml.client.GuiNotification")) { Field f = c.getDeclaredField("query"); f.setAccessible(true); return f.get(screen); }
+            } catch (Throwable ignored) { }
+            return null;
+        }
+        static String queryText(Object q) {
+            try { Object t = q.getClass().getMethod("getText").invoke(q); return t == null ? null : String.valueOf(t).replace('\n', ' '); } catch (Throwable e) { return null; }
+        }
+        /** Answers FML's question with "no" (a notice has no answer, it is just closed) and takes its screen away, as its button would. */
+        void answerNo(Object q) {
+            if (q == null) return;
+            try { q.getClass().getMethod("setResult", boolean.class).invoke(q, false); } catch (Throwable ignored) { }   // notify(): no result to set
+            try { q.getClass().getMethod("finish").invoke(q); } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not answer FML's question: " + e); }
+            try {   // the client thread loops while the question's screen is up; setting the field avoids GL calls off that thread
+                Object screen = field(mc, "field_71462_r");
+                for (Class<?> c = screen == null ? null : screen.getClass(); c != null; c = c.getSuperclass())
+                    if (c.getName().equals("net.minecraftforge.fml.client.GuiNotification")) { Field f = field0(mc.getClass(), "field_71462_r"); f.set(mc, null); break; }
+            } catch (Throwable e) { System.err.println("[amber-ul legacy] maintenance: could not close FML's question: " + e); }
+        }
 
         /** FML's StartupQuery waiting for the player's answer, or null. */
         Object pendingQuery() {
@@ -325,6 +370,8 @@ public final class LegacyMaintenance {
         }
 
         Object onClient(Callable<Object> c) throws Throwable { return schedule(mc, c, false); }
+        /** addScheduledTask on the client without waiting. */
+        static Future<?> post(Object owner, Runnable r) throws Throwable { return (Future<?>) owner.getClass().getMethod("func_152344_a", Runnable.class).invoke(owner, r); }
         static Object onServer(Object server, Callable<Object> c) throws Throwable { return schedule(server, c, true); }
         /**
          * addScheduledTask(Runnable) on the client or the server, and wait for it. For the server: refused when it is not
@@ -361,6 +408,35 @@ public final class LegacyMaintenance {
         t.setDaemon(true); t.start();
     }
 
+    /**
+     * The first spiral index in [from, to) whose chunk has no entry in its region file (world/region/r.X.Z.mca), or -1.
+     * The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
+     */
+    static long firstUnsaved(File regionDir, int cx, int cz, long from, long to) throws java.io.IOException {
+        Map<String, int[]> headers = new java.util.HashMap<String, int[]>();
+        Spiral s = new Spiral();
+        for (long i = 0; i < to; i++) {
+            int[] d = s.next();
+            if (i < from) continue;
+            int x = cx + d[0], z = cz + d[1];
+            String key = (x >> 5) + "." + (z >> 5);
+            int[] h = headers.get(key);
+            if (h == null) { h = regionHeader(new File(regionDir, "r." + key + ".mca")); headers.put(key, h); }
+            if (h[(x & 31) + (z & 31) * 32] == 0) return i;
+        }
+        return -1;
+    }
+    /** The 1024 chunk location entries of a region file (0: no chunk), all 0 when there is no file. */
+    static int[] regionHeader(File f) throws java.io.IOException {
+        int[] h = new int[1024];
+        if (!f.isFile()) return h;
+        java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.io.FileInputStream(f)));
+        try { for (int i = 0; i < 1024; i++) h[i] = in.readInt(); }
+        catch (java.io.EOFException e) { /* a region file still being created: what is there */ }
+        finally { in.close(); }
+        return h;
+    }
+
     /** Square spiral offsets, the same order as amber.ul.runtime.MaintenanceRun.Spiral (a progress file works on both). */
     static final class Spiral {
         int x, z, ring, leg, step;
@@ -383,6 +459,12 @@ public final class LegacyMaintenance {
         try { return method(o.getClass(), name, 0).invoke(o); } catch (InvocationTargetException e) { throw e.getCause(); }
     }
     static Object call0(Object o, String name) throws Exception { return method(o.getClass(), name, 0).invoke(o); }
+    static Field field0(Class<?> cls, String name) throws NoSuchFieldException {
+        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
+            try { Field f = c.getDeclaredField(name); f.setAccessible(true); return f; } catch (NoSuchFieldException ignored) { }
+        }
+        throw new NoSuchFieldException(cls.getName() + "." + name);
+    }
     static Object field(Object o, String name) throws Exception {
         for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
             try { Field f = c.getDeclaredField(name); f.setAccessible(true); return f.get(o); } catch (NoSuchFieldException ignored) { }

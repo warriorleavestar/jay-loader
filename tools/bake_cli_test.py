@@ -411,12 +411,19 @@ def maintenance(kind, req, ver, mcv, gamedir, fresh_world):
         mx = max((x['loadedChunks'] for x in st), default=-1); heap = [x['heapMB'] for x in st]
         check(f'maintenance {kind}: paused the whole run (pause menu), radius 48 = 9409 chunks: done, loaded chunks stay <= 6000 (max {mx}), heap {min(heap, default=0)}-{max(heap, default=0)} MB ({time.time() - t:.0f} s, exit {code})',
               code == 0 and steps(prog, 'done') and late and all(x['paused'] is True for x in late) and 0 < mx <= 6000, f'{tail(prog)} {st[-3:]} see {T}/{kind}-mt-pause.log')
+    else: check(f'maintenance {kind}: bake radius 48 (pause run)', False, f'{code} {out[-1:]}')
     # 5. a cancel made while the game is still loading is kept: the run stops before the world is opened
     code, out, err = bake('bake-instance', dict(req, maintenance={'world': w, 'pregenRadius': 30})); res = [x for x in out if x['type'] == 'result']
     if res:
         code, prog, log = run_maint(f'{kind}-mt-early-cancel', res[0], ver, mcv, gamedir, cancel_after=3)
         check(f'maintenance {kind}: cancel file made during loading -> cancelled before the world opens, quits (exit {code})', code == 0 and steps(prog, 'cancelled')
               and not steps(prog, 'open') and not steps(prog, 'spawn') and not os.path.exists(res[0]['launch']['maintenance']['cancelFile']), f'{tail(prog)}')
+        # 5b. a cancel made while the world is opening (the open runs on the client thread and is not waited for): cancelled, quits
+        code, prog, log = run_maint(f'{kind}-mt-open-cancel', res[0], ver, mcv, gamedir, cancel_when=lambda p: p.get('step') == 'open' and p['done'] == 0)
+        cn = steps(prog, 'cancelled')
+        check(f'maintenance {kind}: cancel file made while the world opens -> cancelled while opening, no chunks generated, quits (exit {code})', code == 0 and cn
+              and 'opening' in (cn[-1].get('message') or '') and not steps(prog, 'spawn') and not steps(prog, 'failed') and not os.path.exists(res[0]['launch']['maintenance']['cancelFile']), f'{tail(prog)}')
+    else: check(f'maintenance {kind}: bake radius 30 (cancel runs)', False, f'{code} {out[-1:]}')
     # 6. a world and an instance folder outside any code page: ASCII progress lines, the cancel file still works
     w4 = '维护-' + chr(0x1F642); prep(w4, f'{saves}/{fresh_world}'); inst4 = f'{T}/实例-{kind}'
     code, out, err = bake('bake-instance', dict(req, instanceDir=inst4, gameDir=gamedir, maintenance={'world': w4, 'pregenRadius': 24})); res = [x for x in out if x['type'] == 'result']

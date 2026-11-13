@@ -178,8 +178,8 @@ public final class MaintenanceRun {
                 if (!upgrade(source)) throw new Cancelled("upgrade cancelled; the world was not opened");
                 System.out.println("[amber-ul] 维护: 世界已升级, DataVersion " + dv + " -> " + LevelDat.dataVersion(dat));
             }
-            open();
-            Object server = waitForServer();
+            long t0 = System.currentTimeMillis();
+            Object server = waitForServer(open(), t0);
             boolean complete;
             try { complete = pregen(server, dir); }
             catch (ServerGone e) { complete = false; }
@@ -245,9 +245,13 @@ public final class MaintenanceRun {
 
         CompletableFuture<Void> openFailed = new CompletableFuture<>();
         Class<?> openedFrom;
-        void open() throws Throwable {
+        /**
+         * Asks the client thread to open the world and returns at once: loading the world data and the data packs runs on
+         * that thread and can take long or wait on a screen, so cancel and the deadline are watched meanwhile (waitForServer).
+         */
+        CompletableFuture<Object> open() throws Throwable {
             progress("open", 0, 1, world, null);
-            onClient(() -> {
+            return post(mc, () -> {
                 Object screen = field(mc, "screen");
                 openedFrom = screen == null ? null : screen.getClass();
                 Object flows = call(mc, "createWorldOpenFlows");
@@ -257,10 +261,13 @@ public final class MaintenanceRun {
             });
         }
 
-        Object waitForServer() throws Throwable {
-            long t0 = System.currentTimeMillis(), until = t0 + Long.getLong("amber.ul.maintenance.openWaitMs", 30L * 60 * 1000);
+        Object waitForServer(CompletableFuture<Object> opening, long t0) throws Throwable {
+            long until = t0 + Long.getLong("amber.ul.maintenance.openWaitMs", 30L * 60 * 1000);
             while (System.currentTimeMillis() < until) {
                 Thread.sleep(250);
+                if (opening.isCompletedExceptionally()) {
+                    try { opening.get(); } catch (ExecutionException e) { throw e.getCause(); }
+                }
                 if (openFailed.isDone()) throw new IllegalStateException("the game did not open the world (cancelled or failed; see the game log)");
                 Object server = call(mc, "getSingleplayerServer");
                 if (server != null && Boolean.TRUE.equals(call(server, "isRunning")) && field(mc, "player") != null && field(mc, "level") != null) {
@@ -269,7 +276,7 @@ public final class MaintenanceRun {
                 }
                 checkCancel("while the world was opening");
                 Object screen = field(mc, "screen");
-                if (server == null && screen != null && System.currentTimeMillis() - t0 > 60_000) {
+                if (server == null && screen != null && opening.isDone() && System.currentTimeMillis() - t0 > 60_000) {
                     String n = screen.getClass().getSimpleName();
                     if (screen.getClass() == openedFrom) throw new IllegalStateException("the game did not open the world (back on " + screen.getClass().getName() + "; see the game log)");
                     if (n.contains("Confirm") || n.contains("Alert") || n.contains("Backup") || n.contains("Error") || n.contains("Failure"))
@@ -300,7 +307,7 @@ public final class MaintenanceRun {
             long spawnTotal = side(spawnR), total = side(r);
             if (done > 0) { System.out.println("[amber-ul] 维护: 从上次的进度继续, 已完成 " + Math.min(done, total) + " / " + total + " 区块"); progress("resume", Math.min(done, total), total, world, null); }
             Spiral s = new Spiral(); for (long i = 0; i < done && i < total; i++) s.next();
-            long lastLine = 0, lastSave = System.currentTimeMillis(), savedAt = done;
+            long lastLine = 0, lastSave = System.currentTimeMillis(); savedAt = done;
             int batch = Integer.getInteger("amber.ul.maintenance.batch", 16), cap = Integer.getInteger("amber.ul.maintenance.maxLoadedChunks", 6000);
             boolean stats = Boolean.getBoolean("amber.ul.maintenance.stats"), debugPause = Boolean.getBoolean("amber.ul.maintenance.debugPause");
             while (done < total) {
@@ -334,9 +341,14 @@ public final class MaintenanceRun {
         static long side(int r) { long d = 2L * r + 1; return d * d; }
 
         /** Chunks to disk first (forced save, as /save-all flush), then the index: a saved index never runs ahead of the chunks. */
+        long savedAt;   // the chunks before this spiral index are on disk (checked)
         void save(Object server, Object level, Path pf, int cx, int cz, int r, long done) throws Throwable {
             if (Boolean.TRUE.equals(field(level, "noSave"))) throw new IllegalStateException("saving is turned off in this world (/save-off): the chunks would not reach the disk");
             submit(server, () -> call(server, "saveEverything", true, true, true));
+            // the progress file only moves past chunks that are in their region files: a failed write is only logged by the game
+            long missing = firstUnsaved(pf.getParent().resolve("region"), cx, cz, savedAt, done);
+            if (missing >= 0) throw new IllegalStateException("chunks were not saved (the first at spiral index " + missing + "; see the game log): the progress file stays at " + savedAt + ", the next run generates them again");
+            savedAt = done;
             JsonObject p = new JsonObject();
             p.addProperty("schema", "amber-ul/pregen@1"); p.addProperty("dimension", "minecraft:overworld");
             p.addProperty("centerX", cx); p.addProperty("centerZ", cz); p.addProperty("radius", r); p.addProperty("done", done); p.addProperty("total", side(r));
@@ -363,6 +375,13 @@ public final class MaintenanceRun {
 
         interface Step { Object run() throws Throwable; }
         Object onClient(Step s) throws Throwable { return submit(mc, s); }
+        /** Run on the client or server thread (BlockableEventLoop.execute) without waiting: the future completes when it ran. */
+        static CompletableFuture<Object> post(Object loop, Step s) throws Throwable {
+            CompletableFuture<Object> f = new CompletableFuture<>();
+            Runnable r = () -> { try { f.complete(s.run()); } catch (Throwable e) { f.completeExceptionally(e instanceof InvocationTargetException i && i.getCause() != null ? i.getCause() : e); } };
+            call(loop, "execute", r);
+            return f;
+        }
         /**
          * Run on the client or server thread (BlockableEventLoop.execute) and wait. For the server: refused when it is not
          * running, and given up when it stops before the task ran (a task queued on a stopped server never runs).
@@ -370,15 +389,41 @@ public final class MaintenanceRun {
         static Object submit(Object loop, Step s) throws Throwable {
             boolean server = method(loop.getClass(), "isRunning", 0) != null;
             if (server && !Boolean.TRUE.equals(call(loop, "isRunning"))) throw new ServerGone();
-            CompletableFuture<Object> f = new CompletableFuture<>();
-            Runnable r = () -> { try { f.complete(s.run()); } catch (Throwable e) { f.completeExceptionally(e instanceof InvocationTargetException i && i.getCause() != null ? i.getCause() : e); } };
-            call(loop, "execute", r);
+            CompletableFuture<Object> f = post(loop, s);
             while (true) {
                 try { return f.get(1, TimeUnit.SECONDS); }
                 catch (ExecutionException e) { throw e.getCause(); }
                 catch (TimeoutException e) { if (server && !Boolean.TRUE.equals(call(loop, "isRunning"))) throw new ServerGone(); }
             }
         }
+    }
+
+    /**
+     * The first spiral index in [from, to) whose chunk has no entry in its region file (world/region/r.X.Z.mca), or -1.
+     * The game only logs a failed chunk write, so after a save this is what says the chunks reached the disk.
+     */
+    public static long firstUnsaved(Path regionDir, int cx, int cz, long from, long to) throws java.io.IOException {
+        java.util.Map<String, int[]> headers = new java.util.HashMap<>();
+        Spiral s = new Spiral();
+        for (long i = 0; i < to; i++) {
+            int[] d = s.next();
+            if (i < from) continue;
+            int x = cx + d[0], z = cz + d[1];
+            String key = (x >> 5) + "." + (z >> 5);
+            int[] h = headers.get(key);
+            if (h == null) { h = regionHeader(regionDir.resolve("r." + key + ".mca")); headers.put(key, h); }
+            if (h[(x & 31) + (z & 31) * 32] == 0) return i;
+        }
+        return -1;
+    }
+    /** The 1024 chunk location entries of a region file (0: no chunk), all 0 when there is no file. */
+    static int[] regionHeader(Path f) throws java.io.IOException {
+        int[] h = new int[1024];
+        if (!Files.isRegularFile(f)) return h;
+        try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(Files.newInputStream(f)))) {
+            for (int i = 0; i < 1024; i++) h[i] = in.readInt();
+        } catch (java.io.EOFException e) { /* a region file still being created: what is there */ }
+        return h;
     }
 
     /** Square spiral offsets: (0,0), then ring 1, ring 2, ... (a prefix of a bigger spiral is a smaller one). */

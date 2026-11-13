@@ -40,6 +40,22 @@ public final class HardeningTest {
     }
 
     static void run(Path root) throws Exception {
+        System.out.println("maintenance: the save check reads the region headers");
+        {   // radius 1 around chunk (0,0): 9 chunks over the four regions r.-1.-1, r.0.-1, r.-1.0, r.0.0
+            Path rd = Files.createDirectories(root.resolve("region"));
+            check("no region files: the first chunk is not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            Map<String, int[]> heads = new HashMap<>(); int[][] sp = { {0,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}, {0,1}, {-1,1}, {-1,0} };
+            for (int i = 0; i < 9; i++) if (i != 5) { int x = sp[i][0], z = sp[i][1]; heads.computeIfAbsent((x >> 5) + "." + (z >> 5), k -> new int[1024])[(x & 31) + (z & 31) * 32] = 0x201; }
+            for (var e : heads.entrySet()) {
+                ByteArrayOutputStream b = new ByteArrayOutputStream(); DataOutputStream o = new DataOutputStream(b);
+                for (int v : e.getValue()) o.writeInt(v);
+                o.write(new byte[4096]); Files.write(rd.resolve("r." + e.getKey() + ".mca"), b.toByteArray());
+            }
+            check("one chunk without a region entry: its spiral index", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 5);
+            check("the range after it is all saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 6, 9) == -1);
+            Files.write(rd.resolve("r.0.0.mca"), new byte[10]);   // a region file cut short: no entries, no exception
+            check("a region file cut short counts as not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+        }
         Path cache = Files.createDirectories(root.resolve("cache"));
         System.out.println("H13 mod ids / cache paths");
         check("fabric id ok", SafeFiles.validModId(LoaderKind.FABRIC, "fabric-api-base"));

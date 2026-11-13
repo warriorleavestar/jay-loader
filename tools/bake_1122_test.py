@@ -146,6 +146,24 @@ def set_level_name(path, name):
     b = name.encode('utf-8'); raw = raw[:o] + struct.pack('>H', len(b)) + b + raw[o + 2 + n:]   # ASCII names only (modified UTF-8 differs above the BMP)
     with gzip.open(path, 'wb') as f: f.write(raw)
 
+def add_missing_block(path, key='amberfake:missing_block', value=4000):
+    """Adds a block registry entry no mod provides to level.dat's FML snapshot (FML/Registries/minecraft:blocks/ids): on load
+    FML asks whether to remove the missing entries (StartupQuery.confirm), as for a save whose mod was taken out."""
+    import gzip, struct
+    raw = gzip.open(path).read()
+    k = raw.find(b'\x0a\x00\x10minecraft:blocks'); assert k >= 0, 'no FML block registry in ' + path
+    ids = raw.find(b'\x09\x00\x03ids\x0a', k); assert ids >= 0, 'no ids list'
+    c = ids + 7; n = struct.unpack('>i', raw[c:c + 4])[0]
+    kb = key.encode('ascii')
+    entry = b'\x08\x00\x01K' + struct.pack('>H', len(kb)) + kb + b'\x03\x00\x01V' + struct.pack('>i', value) + b'\x00'
+    raw = raw[:c] + struct.pack('>i', n + 1) + entry + raw[c + 4:]
+    with gzip.open(path, 'wb') as f: f.write(raw)
+
+def launch_block(code, out, what):
+    """The launch block of a bake-instance result; a failed bake fails the check instead of skipping the test."""
+    lb = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch') if code == 0 else None
+    if not lb: check(f'{what}: bake-instance', False, f'{code} {out[-1:]}')
+    return lb
 
 def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None, keep_world=False, until=None):
     L_ = block or L
@@ -291,7 +309,7 @@ if '--no-launch' not in sys.argv:
             check('maintenance (1.12.2): progress lines are JSON with schema/world; eula.txt untouched', pr and all(x.get('schema') == 'amber-ul/maintenance-progress@1' and x.get('world') == MW for x in pr)
                   and os.path.exists(os.path.join(GAME, 'eula.txt')) == eula_before, pr[:2])
             code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 20}))
-            LM2 = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch')
+            LM2 = launch_block(code, out, 'maintenance (1.12.2) radius 20')
             if LM2:
                 cf = LM2['maintenance']['cancelFile']
                 def watch():   # follows the stdout log; creates the cancel file once 800 chunks are done (the launcher's Cancel button)
@@ -318,7 +336,7 @@ if '--no-launch' not in sys.argv:
         MWP = os.path.join(GAME, 'saves', 'amber-mt-pause')
         shutil.rmtree(MWP, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWP, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
         code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': 'amber-mt-pause', 'pregenRadius': 64}))
-        LP = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch')
+        LP = launch_block(code, out, 'maintenance (1.12.2) pause run')
         if LP:
             t0 = time.time(); m, s = launch('maintenance-pause', stop='never', timeout=2400, block=LP, extra=['-Damber.worldtest.open=false', '-Damber.ul.maintenance.debugPause=true', '-Damber.ul.maintenance.stats=true'], keep_world=True)
             raw = open(os.path.join(T, 'maintenance-pause.log'), encoding='utf-8', errors='replace').read()
@@ -333,7 +351,7 @@ if '--no-launch' not in sys.argv:
         shutil.rmtree(MWP, ignore_errors=True)
         # a cancel made while the game is still loading is kept: the run stops before the world is opened
         code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 30}))
-        LE = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch')
+        LE = launch_block(code, out, 'maintenance (1.12.2) early cancel')
         if LE:
             cfe = LE['maintenance']['cancelFile']
             def early(): time.sleep(4); open(cfe, 'w').close()
@@ -346,7 +364,7 @@ if '--no-launch' not in sys.argv:
         MWU = '维护-' + chr(0x1F642); MWUD = os.path.join(GAME, 'saves', MWU); INSTU = os.path.join(T, '实例-维护')
         shutil.rmtree(MWUD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWUD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
         code, out, err = bake('bake-instance', dict(REQ, instanceDir=INSTU, maintenance={'world': MWU, 'pregenRadius': 20}))
-        LU = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch')
+        LU = launch_block(code, out, 'maintenance (1.12.2) non-ASCII names')
         check('maintenance (1.12.2): non-ASCII world and instance folder bake, ASCII JVM arguments', code == 0 and LU and all(a.isascii() for a in LU['jvmArgs'] if a.startswith('-Damber.ul.maintenance')), f'{code} {out[-1:]}')
         if LU:
             cfu = LU['maintenance']['cancelFile']
@@ -365,6 +383,41 @@ if '--no-launch' not in sys.argv:
             check(f'maintenance (1.12.2): non-ASCII names: progress lines pure ASCII JSON with the right world name, cancel works ({m})', m.get('exit') == 0 and pr
                   and all(l.isascii() for l in rawl) and all(x.get('world') == MWU for x in pr) and steps(pr, 'cancelled') and not os.path.exists(cfu), tail(pr))
         shutil.rmtree(MWUD, ignore_errors=True)
+        # FML asks before it opens the world (here: a block registry entry no mod provides) and nobody answers: launchIntegratedServer
+        # waits on the client thread for the answer. After 60 s the run answers "no", fails with a problem line and the game quits.
+        MWQ = 'amber-mt-ask'; MWQD = os.path.join(GAME, 'saves', MWQ)
+        def ask_world():
+            shutil.rmtree(MWQD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWQD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json', 'level.dat_old'))
+            add_missing_block(os.path.join(MWQD, 'level.dat'))
+        ask_world()
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MWQ, 'pregenRadius': 0}))
+        LQ = launch_block(code, out, 'maintenance (1.12.2) FML question')
+        if LQ:
+            pfq = LQ['problemsFile']
+            t0 = time.time(); m, s = launch('maintenance-ask', stop='never', timeout=900, block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance-ask'); fl = steps(pr, 'failed')
+            probs_q = [json.loads(l) for l in open(pfq, encoding='utf-8') if l.strip()] if os.path.exists(pfq) else []
+            latest_ = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
+            check(f'maintenance (1.12.2): FML asks about missing registry entries, nobody answers -> after 60 s failed + maintenance_failed problem, the game quits ({time.time() - t0:.0f} s, {m})',
+                  m.get('exit') == 0 and fl and 'FML is asking' in (fl[-1].get('message') or '') and not steps(pr, 'spawn') and steps(pr, 'quit')
+                  and any(x.get('code') == 'maintenance_failed' for x in probs_q) and 'amberfake:missing_block' in latest_, f'{tail(pr)} {fl[-1:]} {probs_q[-1:]} see {T}/maintenance-ask.log')
+            # the same question, and the launcher cancels while it is up: cancelled, the game quits, long before the 60 s
+            ask_world(); cfq = LQ['maintenance']['cancelFile']
+            def watch_q():
+                while True:
+                    time.sleep(0.5)
+                    try: pr_ = progress_of('maintenance-ask-cancel')
+                    except Exception: continue
+                    if any(x.get('step') == 'open' and x['done'] == 0 for x in pr_): time.sleep(15); open(cfq, 'w').close(); return
+                    if any(x.get('step') in ('done', 'quit', 'failed', 'cancelled') for x in pr_): return
+            open(os.path.join(T, 'maintenance-ask-cancel.log'), 'w').close()
+            threading.Thread(target=watch_q, daemon=True).start()
+            t0 = time.time(); m, s = launch('maintenance-ask-cancel', stop='never', timeout=900, block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance-ask-cancel'); op = steps(pr, 'open'); cn = steps(pr, 'cancelled')
+            check(f'maintenance (1.12.2): cancel while FML is asking -> cancelled while opening, the game quits ({time.time() - t0:.0f} s, {m})',
+                  m.get('exit') == 0 and cn and 'opening' in (cn[-1].get('message') or '') and not steps(pr, 'failed') and not steps(pr, 'spawn')
+                  and op and not any(x['done'] == 1 for x in op) and not os.path.exists(cfq), f'{tail(pr)} {cn[-1:]}')
+        shutil.rmtree(MWQD, ignore_errors=True)
         shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
     else: check('maintenance (1.12.2): needs the warm run world', False)
 
