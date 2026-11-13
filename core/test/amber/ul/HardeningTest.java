@@ -30,6 +30,36 @@ public final class HardeningTest {
     static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
     static String fmj(String id, String extra) { return "{\"schemaVersion\":1,\"id\":" + id + ",\"version\":\"1.0\"" + extra + "}"; }
 
+    /** A chunk's NBT, zlib-compressed as in a region file: xPos, zPos, Status (1.13+) or inside Level (legacy). */
+    static byte[] chunk(int x, int z, String status, boolean legacy) throws IOException {
+        ByteArrayOutputStream b = new ByteArrayOutputStream(); DataOutputStream o = new DataOutputStream(b);
+        o.writeByte(10); o.writeUTF("");
+        o.writeByte(3); o.writeUTF("DataVersion"); o.writeInt(legacy ? 1343 : 3465);
+        if (legacy) { o.writeByte(10); o.writeUTF("Level"); }
+        o.writeByte(3); o.writeUTF("xPos"); o.writeInt(x); o.writeByte(3); o.writeUTF("zPos"); o.writeInt(z);
+        if (status != null) { o.writeByte(8); o.writeUTF("Status"); o.writeUTF(status); }
+        o.writeByte(9); o.writeUTF("sections"); o.writeByte(10); o.writeInt(1); o.writeByte(12); o.writeUTF("data"); o.writeInt(3); o.writeLong(1); o.writeLong(2); o.writeLong(3); o.writeByte(0);
+        if (legacy) o.writeByte(0);
+        o.writeByte(0);
+        ByteArrayOutputStream c = new ByteArrayOutputStream();
+        try (var d = new java.util.zip.DeflaterOutputStream(c)) { d.write(b.toByteArray()); }
+        return c.toByteArray();
+    }
+    /** A region file with these chunks (key: (x & 31) + (z & 31) * 32), each in its own sectors, zlib. */
+    static void region(Path f, Map<Integer, byte[]> chunks) throws IOException {
+        int[] head = new int[1024]; ByteArrayOutputStream body = new ByteArrayOutputStream(); DataOutputStream bo = new DataOutputStream(body); int sector = 2;
+        for (var e : chunks.entrySet()) {
+            byte[] c = e.getValue(); int len = c.length + 1, sectors = (len + 4 + 4095) / 4096;
+            head[e.getKey()] = (sector << 8) | sectors;
+            bo.writeInt(len); bo.writeByte(2); bo.write(c); bo.write(new byte[sectors * 4096 - len - 4]);
+            sector += sectors;
+        }
+        ByteArrayOutputStream all = new ByteArrayOutputStream(); DataOutputStream o = new DataOutputStream(all);
+        for (int v : head) o.writeInt(v);
+        o.write(new byte[4096]); o.write(body.toByteArray());
+        Files.write(f, all.toByteArray());
+    }
+
     public static void main(String[] a) throws Exception {
         Path root = Files.createTempDirectory("amber-hardening");
         try { run(root); } finally {
@@ -40,6 +70,87 @@ public final class HardeningTest {
     }
 
     static void run(Path root) throws Exception {
+        System.out.println("maintenance: the save check reads the chunks back");
+        {   // radius 1 around chunk (0,0): 9 chunks over the four regions r.-1.-1, r.0.-1, r.-1.0, r.0.0
+            Path rd = Files.createDirectories(root.resolve("region"));
+            check("no region files: the first chunk is not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            int[][] sp = { {0,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}, {0,1}, {-1,1}, {-1,0} };
+            Map<String, Map<Integer, byte[]>> regions = new HashMap<>();
+            for (int i = 0; i < 9; i++) if (i != 5) { int x = sp[i][0], z = sp[i][1]; regions.computeIfAbsent((x >> 5) + "." + (z >> 5), k -> new TreeMap<>()).put((x & 31) + (z & 31) * 32, chunk(x, z, "minecraft:full", false)); }
+            for (var e : regions.entrySet()) region(rd.resolve("r." + e.getKey() + ".mca"), e.getValue());
+            check("one chunk not in its region file: its spiral index", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 5);
+            check("the range after it is all saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 6, 9) == -1);
+            Path r00 = rd.resolve("r.0.0.mca"); byte[] good = Files.readAllBytes(r00);
+            byte[] bad = good.clone(); Arrays.fill(bad, 8192, bad.length, (byte) 0); Files.write(r00, bad);   // header entry, no chunk data
+            check("a header entry without readable chunk data counts as not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            region(r00, Map.of(0, chunk(5, 7, "minecraft:full", false)));
+            check("a chunk with other coordinates counts as not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+            region(r00, Map.of(0, chunk(0, 0, "minecraft:features", false)));
+            check("a chunk that is not full counts as not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 1) == 0);
+            region(r00, Map.of(0, chunk(0, 0, "minecraft:full", false)));
+            check("the same chunk, full: saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 1) == -1);
+            byte[] full = Files.readAllBytes(r00); int clen = java.nio.ByteBuffer.wrap(full, 8192, 4).getInt();
+            Files.write(r00, Arrays.copyOf(full, 8192 + 4 + clen));   // the last chunk not yet padded to its sector (the game pads on close)
+            check("the last chunk, not padded to its sector yet: saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 1) == -1);
+            Files.write(r00, Arrays.copyOf(full, 8192 + 2 + clen));
+            check("chunk data cut short: not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 1) == 0);
+            Files.write(r00, new byte[10]);   // a region file cut short: no entries, no exception
+            check("a region file cut short counts as not saved", amber.ul.runtime.MaintenanceRun.firstUnsaved(rd, 0, 0, 0, 9) == 0);
+        }
+        System.out.println("maintenance: progress file");
+        {
+            String ok = "{\"schema\":\"amber-ul/pregen@1\",\"dimension\":\"minecraft:overworld\",\"centerX\":3,\"centerZ\":-2,\"radius\":12,\"done\":100,\"total\":625,\"complete\":false}";
+            check("a valid file resumes at done", amber.ul.runtime.MaintenanceFiles.resumeAt(ok, 3, -2, 12) == 100);
+            check("another centre starts at 0", amber.ul.runtime.MaintenanceFiles.resumeAt(ok, 0, 0, 12) == 0);
+            check("a smaller radius now: at most its total", amber.ul.runtime.MaintenanceFiles.resumeAt(ok, 3, -2, 1) == 9);
+            check("done = Long.MAX_VALUE is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("\"done\":100", "\"done\":9223372036854775807"), 3, -2, 12) == -1);
+            check("done larger than a long is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("\"done\":100", "\"done\":99999999999999999999"), 3, -2, 12) == -1);
+            check("negative done is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("\"done\":100", "\"done\":-5"), 3, -2, 12) == -1);
+            check("total that does not match the radius is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("\"total\":625", "\"total\":626"), 3, -2, 12) == -1);
+            check("a huge radius is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("\"radius\":12", "\"radius\":3000000000").replace("\"total\":625", "\"total\":1"), 3, -2, 12) == -1);
+            check("another schema is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok.replace("pregen@1", "pregen@9"), 3, -2, 12) == -1);
+            check("an oversized file is not valid", amber.ul.runtime.MaintenanceFiles.resumeAt(ok + " ".repeat(5000), 3, -2, 12) == -1);
+            Path dir = Files.createDirectories(root.resolve("progress")), pf = dir.resolve("amber-ul-pregen.json"), sentinel = root.resolve("sentinel.txt");
+            Files.writeString(sentinel, "keep");
+            boolean linked = true;
+            try { Files.createLink(dir.resolve("amber-ul-pregen.json.tmp"), sentinel); } catch (Exception e) { linked = false; }
+            amber.ul.runtime.MaintenanceFiles.writeAtomically(pf.toFile(), utf8(ok));
+            amber.ul.runtime.MaintenanceFiles.writeAtomically(pf.toFile(), utf8(ok));
+            check("progress written through a fresh temp file; a planted link is not followed", Files.readString(pf).equals(ok) && Files.readString(sentinel).equals("keep") && (!linked || Files.readString(dir.resolve("amber-ul-pregen.json.tmp")).equals("keep")));
+            try (var l = Files.list(dir)) { check("no temp file left behind", l.filter(f -> f.getFileName().toString().endsWith(".tmp")).count() == (linked ? 1 : 0)); }
+        }
+        System.out.println("maintenance: error text");
+        {
+            String home0 = System.getProperty("user.home"), user0 = System.getProperty("user.name");
+            try {
+                System.setProperty("user.home", "C:\\Users\\fakeuser"); System.setProperty("user.name", "fakeuser");
+                String d = amber.ul.runtime.MaintenanceFiles.describe(new java.nio.file.DirectoryNotEmptyException("C:\\Users\\fakeuser\\games\\inst\\saves\\w\\amber-ul-pregen.json"));
+                check("home folder masked, stable reason and role", !d.toLowerCase().contains("c:\\users\\fakeuser") && d.contains("~") && d.startsWith("io_error (progress file)"));
+                String e = amber.ul.runtime.MaintenanceFiles.mask("D:/data/FakeUser/saves and C:/Users/fakeuser/x and fakeuserX");
+                check("user name masked as a folder name only", e.equals("D:/data/<user>/saves and ~/x and fakeuserX"));
+            } finally { System.setProperty("user.home", home0); System.setProperty("user.name", user0); }
+        }
+        System.out.println("level.dat budgets");
+        {
+            ByteArrayOutputStream b = new ByteArrayOutputStream(); DataOutputStream o = new DataOutputStream(b);
+            o.writeByte(10); o.writeUTF(""); for (int i = 0; i < 2000; i++) { o.writeByte(10); o.writeUTF("a"); }
+            throwsIo("NBT nested 2000 deep: IOException, no stack overflow", () -> amber.ul.LevelDat.values(new ByteArrayInputStream(b.toByteArray()), "Data", 1 << 20));
+            ByteArrayOutputStream b2 = new ByteArrayOutputStream(); DataOutputStream o2 = new DataOutputStream(b2);
+            o2.writeByte(10); o2.writeUTF(""); o2.writeByte(7); o2.writeUTF("big"); o2.writeInt(Integer.MAX_VALUE);
+            throwsIo("a 2 GiB byte array: IOException before reading", () -> amber.ul.LevelDat.values(new ByteArrayInputStream(b2.toByteArray()), "Data", 64L << 20));
+            ByteArrayOutputStream b3 = new ByteArrayOutputStream(); DataOutputStream o3 = new DataOutputStream(b3);
+            o3.writeByte(10); o3.writeUTF(""); o3.writeByte(9); o3.writeUTF("l"); o3.writeByte(1); o3.writeInt(Integer.MAX_VALUE);
+            throwsIo("a list of 2^31 elements: IOException", () -> amber.ul.LevelDat.values(new ByteArrayInputStream(b3.toByteArray()), "Data", 64L << 20));
+            Path dat = root.resolve("level.dat");
+            try (var g = new DataOutputStream(new java.util.zip.GZIPOutputStream(Files.newOutputStream(dat)))) { g.writeByte(10); g.writeUTF(""); g.writeByte(10); g.writeUTF("Data"); g.writeByte(3); g.writeUTF("DataVersion"); g.writeInt(3465); g.writeByte(0); g.writeByte(0); }
+            check("a normal level.dat still reads", amber.ul.LevelDat.dataVersion(dat) == 3465);
+        }
+        System.out.println("bake requests: a null field counts as missing");
+        {
+            var q = com.google.gson.JsonParser.parseString("{\"side\":null,\"arr\":[1]}").getAsJsonObject();
+            try { Bake.str(q, "side"); check("side null: bad request, not internal", false); } catch (Bake.BadRequest e) { check("side null: bad request (" + e.getMessage() + ")", e.getMessage().equals("missing field side")); }
+            try { Bake.str(q, "arr"); check("an array field: bad request", false); } catch (Bake.BadRequest e) { check("an array field: bad request", true); }
+        }
         Path cache = Files.createDirectories(root.resolve("cache"));
         System.out.println("H13 mod ids / cache paths");
         check("fabric id ok", SafeFiles.validModId(LoaderKind.FABRIC, "fabric-api-base"));

@@ -15,6 +15,7 @@ Inputs from tools/fetch_1122.py (mc/1.12.2, git-ignored); everything written und
 --package: the loader and bridges from build/dist (tools/package.py), as Jay ships them.
 """
 import json, os, re, shutil, subprocess, sys, threading, time, zipfile
+BS = chr(92)
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), '1.12.2'); LIB = os.path.join(B, 'libraries'); T = os.path.join(os.environ.get('AMBER_UL_MC') or os.path.join(R, 'mc'), 'bake1122')
@@ -114,6 +115,27 @@ def level_name(path):
     # NBT strings are Java modified UTF-8: a character outside the BMP is two 3-byte surrogates
     return raw[o + 2:o + 2 + n].decode('utf-8', 'surrogatepass').encode('utf-16-le', 'surrogatepass').decode('utf-16-le')
 
+def populated(world_dir, cx, cz, r):
+    """(chunks with TerrainPopulated=1, chunks looked at) for the square of radius r around chunk (cx, cz), from the region files."""
+    import struct, zlib
+    want = {(x, z) for x in range(cx - r, cx + r + 1) for z in range(cz - r, cz + r + 1)}; pop = 0
+    for rx in range((cx - r) >> 5, ((cx + r) >> 5) + 1):
+        for rz in range((cz - r) >> 5, ((cz + r) >> 5) + 1):
+            f = os.path.join(world_dir, 'region', f'r.{rx}.{rz}.mca')
+            if not os.path.exists(f): continue
+            b = open(f, 'rb').read()
+            for i in range(1024):
+                x, z = rx * 32 + (i & 31), rz * 32 + (i >> 5)
+                if (x, z) not in want: continue
+                off = struct.unpack('>I', b[i * 4:i * 4 + 4])[0]; sec = (off >> 8) * 4096
+                if not off: continue
+                n = struct.unpack('>I', b[sec:sec + 4])[0]
+                try: nbt = zlib.decompress(b[sec + 5:sec + 4 + n])
+                except zlib.error: continue
+                k = nbt.find(b'\x01\x00\x10TerrainPopulated')
+                if k >= 0 and nbt[k + 19] == 1: pop += 1
+    return pop, len(want)
+
 def last_played(path):
     import gzip, struct
     raw = gzip.open(path).read(); key = b'\x04' + struct.pack('>H', 10) + b'LastPlayed'; k = raw.find(key)
@@ -125,6 +147,24 @@ def set_level_name(path, name):
     b = name.encode('utf-8'); raw = raw[:o] + struct.pack('>H', len(b)) + b + raw[o + 2 + n:]   # ASCII names only (modified UTF-8 differs above the BMP)
     with gzip.open(path, 'wb') as f: f.write(raw)
 
+def add_missing_block(path, key='amberfake:missing_block', value=4000):
+    """Adds a block registry entry no mod provides to level.dat's FML snapshot (FML/Registries/minecraft:blocks/ids): on load
+    FML asks whether to remove the missing entries (StartupQuery.confirm), as for a save whose mod was taken out."""
+    import gzip, struct
+    raw = gzip.open(path).read()
+    k = raw.find(b'\x0a\x00\x10minecraft:blocks'); assert k >= 0, 'no FML block registry in ' + path
+    ids = raw.find(b'\x09\x00\x03ids\x0a', k); assert ids >= 0, 'no ids list'
+    c = ids + 7; n = struct.unpack('>i', raw[c:c + 4])[0]
+    kb = key.encode('ascii')
+    entry = b'\x08\x00\x01K' + struct.pack('>H', len(kb)) + kb + b'\x03\x00\x01V' + struct.pack('>i', value) + b'\x00'
+    raw = raw[:c] + struct.pack('>i', n + 1) + entry + raw[c + 4:]
+    with gzip.open(path, 'wb') as f: f.write(raw)
+
+def launch_block(code, out, what):
+    """The launch block of a bake-instance result; a failed bake fails the check instead of skipping the test."""
+    lb = (next((x for x in out if x['type'] == 'result'), None) or {}).get('launch') if code == 0 else None
+    if not lb: check(f'{what}: bake-instance', False, f'{code} {out[-1:]}')
+    return lb
 
 def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath=None, at_world=None, keep_world=False, until=None):
     L_ = block or L
@@ -151,6 +191,7 @@ def launch(label, timeout=900, extra=(), stop='world_60s', block=None, classpath
                 if at_world and 'world' in marks: at_world(); at_world = None
                 if until and 'until' not in marks and until(): marks['until'] = round(time.time() - t0, 1)
                 if stop in marks or 'failed' in marks: break
+            if p.poll() is not None: marks['exit'] = p.returncode   # the game quit by itself (maintenance)
             time.sleep(3)   # one more stats.txt round (every 2 s)
         finally: p.kill(); p.wait()
     st = os.path.join(tc, 'stats.txt')
@@ -240,6 +281,173 @@ if '--no-launch' not in sys.argv:
         check(f'quickPlay singleplayer (1.12.2): the world keeps its display name (level.dat LevelName {level_name(os.path.join(QWD, "level.dat"))!r})',
               played1 > played0 and level_name(os.path.join(QWD, 'level.dat')) == QNAME)
     shutil.rmtree(QWD, ignore_errors=True)
+
+    # v1.3.3 maintenance mode: core-legacy opens the world once the main menu is up, generates the spawn area and the
+    # radius around the world spawn in the integrated server, saves, quits; cancel file + resume
+    def progress_of(label):
+        out_ = open(os.path.join(T, label + '.log'), encoding='utf-8', errors='replace').read()
+        return [json.JSONDecoder().raw_decode(l.split('@amber-ul/progress ', 1)[1])[0] for l in out_.splitlines() if '@amber-ul/progress {' in l]
+    def steps(pr, st): return [x for x in pr if x.get('step') == st]
+    def tail(pr): return [(x['step'], x['done'], x['total']) for x in pr[-5:]]
+    MW = 'amber-mt'; MWD = os.path.join(GAME, 'saves', MW)
+    if os.path.isfile(os.path.join(GAME, 'saves', 'amber-worldtest', 'level.dat')):
+        shutil.rmtree(MWD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json')); set_level_name(os.path.join(MWD, 'level.dat'), 'Maintenance Test Name')
+        cfg = os.path.join(GAME, 'config'); cfg_keep = os.path.join(T, 'config-before-maintenance'); shutil.rmtree(cfg_keep, ignore_errors=True); shutil.copytree(cfg, cfg_keep)
+        eula_before = os.path.exists(os.path.join(GAME, 'eula.txt'))
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 12}))
+        rq = next((x for x in out if x['type'] == 'result'), None); LM = rq and rq['launch']; M = (LM or {}).get('maintenance', {})
+        check('maintenance (1.12.2): launch.maintenance (upgrade by the game on load, spawn 8, radius 12), properties for core-legacy', code == 0 and M.get('upgrade') == 'game'
+              and M.get('worldDataVersion') == 1343 and M.get('pregenRadius') == 12 and '-Damber.ul.maintenance=' + MW in LM['jvmArgs'] and LM['gameArgsPrefix'] == [], f'{code} {M} {out[-1:]}')
+        if LM:
+            t0 = time.time(); m, s = launch('maintenance', stop='never', timeout=1800, block=LM, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance'); pfp = os.path.join(MWD, 'amber-ul-pregen.json'); pf = json.load(open(pfp)) if os.path.exists(pfp) else {}
+            sp, pg = steps(pr, 'spawn'), steps(pr, 'pregen')
+            latest_ = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
+            check(f'maintenance (1.12.2): spawn 289, pregen 625, done, the game quit by itself ({time.time() - t0:.0f} s, {m})', m.get('exit') == 0 and 'failed' not in m
+                  and sp and sp[-1]['done'] == 289 and pg and pg[-1]['done'] == pg[-1]['total'] == 625 and steps(pr, 'done') and steps(pr, 'quit') and pf.get('complete') is True
+                  and 'maintenance: main menu up' in latest_ and 'AMBER-WORLDTEST title screen, opening world' not in latest_ and level_name(os.path.join(MWD, 'level.dat')) == 'Maintenance Test Name',
+                  f'{tail(pr)} {pf} LevelName {level_name(os.path.join(MWD, "level.dat"))!r} see {T}/maintenance.log')
+            check('maintenance (1.12.2): progress lines are JSON with schema/world; eula.txt untouched', pr and all(x.get('schema') == 'amber-ul/maintenance-progress@1' and x.get('world') == MW for x in pr)
+                  and os.path.exists(os.path.join(GAME, 'eula.txt')) == eula_before, pr[:2])
+            code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 20}))
+            LM2 = launch_block(code, out, 'maintenance (1.12.2) radius 20')
+            if LM2:
+                cf = LM2['maintenance']['cancelFile']
+                def watch():   # follows the stdout log; creates the cancel file once 800 chunks are done (the launcher's Cancel button)
+                    while True:
+                        time.sleep(0.5)
+                        try: pr_ = progress_of('maintenance-cancel')
+                        except Exception: continue
+                        if any(x.get('step') == 'pregen' and x['done'] >= 800 for x in pr_): open(cf, 'w').close(); return
+                        if any(x.get('step') in ('done', 'quit', 'failed') for x in pr_): return
+                open(os.path.join(T, 'maintenance-cancel.log'), 'w').close()
+                # a link planted at the old fixed temp name, to a file outside the world: the progress saves never write through it
+                sentinel = os.path.join(T, 'sentinel.txt'); open(sentinel, 'w').write('keep'); planted = os.path.join(MWD, 'amber-ul-pregen.json.tmp')
+                if os.path.lexists(planted): os.remove(planted)
+                try: os.link(sentinel, planted)
+                except OSError: planted = None
+                threading.Thread(target=watch, daemon=True).start()
+                m, s = launch('maintenance-cancel', stop='never', timeout=1800, block=LM2, extra=['-Damber.worldtest.open=false'], keep_world=True)
+                pr = progress_of('maintenance-cancel'); pf = json.load(open(pfp))
+                rs = steps(pr, 'resume')
+                check(f'maintenance (1.12.2): radius 20 resumes at 625; cancel file -> stops, keeps its place ({pf.get("done")}/{pf.get("total")}), quits ({m})', m.get('exit') == 0
+                      and rs and rs[0]['done'] == 625 and steps(pr, 'cancelled') and pf.get('complete') is False and 800 <= pf.get('done', 0) < 1681 and not os.path.exists(cf), tail(pr))
+                stopped = pf.get('done')
+                m, s = launch('maintenance-resume', stop='never', timeout=1800, block=LM2, extra=['-Damber.worldtest.open=false'], keep_world=True)
+                pr = progress_of('maintenance-resume'); pf = json.load(open(pfp)); rs = steps(pr, 'resume')
+                check(f'maintenance (1.12.2): next run continues at {stopped}, finishes 1681 ({m})', m.get('exit') == 0 and rs and rs[0]['done'] == stopped
+                      and steps(pr, 'done') and pf.get('complete') is True and pf.get('done') == 1681, tail(pr))
+                check('maintenance (1.12.2): a link planted at the temp name is not followed (periodic, cancel and done saves; the outside file is unchanged)',
+                      planted and open(sentinel).read() == 'keep' and open(planted).read() == 'keep' and not [f for f in os.listdir(MWD) if f.endswith('.tmp') and f != 'amber-ul-pregen.json.tmp'], planted)
+                if planted: os.remove(planted)
+        # paused the whole run (the pause menu, as when the window loses focus), radius 64: the sliding window keeps the
+        # loaded chunks bounded, and every chunk inside the radius is populated (TerrainPopulated)
+        MWP = os.path.join(GAME, 'saves', 'amber-mt-pause')
+        shutil.rmtree(MWP, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWP, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': 'amber-mt-pause', 'pregenRadius': 64}))
+        LP = launch_block(code, out, 'maintenance (1.12.2) pause run')
+        if LP:
+            t0 = time.time(); m, s = launch('maintenance-pause', stop='never', timeout=2400, block=LP, extra=['-Damber.worldtest.open=false', '-Damber.ul.maintenance.debugPause=true', '-Damber.ul.maintenance.stats=true'], keep_world=True)
+            raw = open(os.path.join(T, 'maintenance-pause.log'), encoding='utf-8', errors='replace').read()
+            st = [json.JSONDecoder().raw_decode(l.split('@amber-ul/maintenance-stats ', 1)[1])[0] for l in raw.splitlines() if '@amber-ul/maintenance-stats {' in l]
+            pr = progress_of('maintenance-pause'); late = [x for x in st if x['done'] > 2000]
+            mx = max((x['loadedChunks'] for x in st), default=-1); heap = [x['heapMB'] for x in st]
+            check(f'maintenance (1.12.2): paused the whole run, radius 64 = 16641 chunks: done, loaded chunks stay bounded (max {mx} <= 4000), heap {min(heap, default=0)}-{max(heap, default=0)} MB ({time.time() - t0:.0f} s, {m})',
+                  m.get('exit') == 0 and steps(pr, 'done') and late and all(x['paused'] is True for x in late) and 0 < mx <= 4000, f'{tail(pr)} {st[-3:]} see {T}/maintenance-pause.log')
+            pfp = os.path.join(MWP, 'amber-ul-pregen.json'); pfj = json.load(open(pfp)) if os.path.exists(pfp) else {}
+            pop, tot = populated(MWP, pfj['centerX'], pfj['centerZ'], 63) if pfj else (0, -1)
+            check(f'maintenance (1.12.2): every chunk inside the radius is populated (TerrainPopulated {pop}/{tot}; window chunks the game unloaded and the run loaded back: {st[-1].get("reloaded") if st else "?"})', tot == 127 * 127 and pop == tot)
+        shutil.rmtree(MWP, ignore_errors=True)
+        # a cancel made while the game is still loading is kept: the run stops before the world is opened
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MW, 'pregenRadius': 30}))
+        LE = launch_block(code, out, 'maintenance (1.12.2) early cancel')
+        if LE:
+            cfe = LE['maintenance']['cancelFile']
+            def early(): time.sleep(4); open(cfe, 'w').close()
+            threading.Thread(target=early, daemon=True).start()
+            m, s = launch('maintenance-early-cancel', stop='never', timeout=900, block=LE, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance-early-cancel')
+            check(f'maintenance (1.12.2): cancel file made during loading -> cancelled before the world opens, quits ({m})', m.get('exit') == 0 and steps(pr, 'cancelled')
+                  and not steps(pr, 'open') and not steps(pr, 'spawn') and not os.path.exists(cfe), tail(pr))
+        # a world and an instance folder outside the code page: ASCII progress lines, the cancel file still works
+        MWU = '维护-' + chr(0x1F642); MWUD = os.path.join(GAME, 'saves', MWU); INSTU = os.path.join(T, '实例-维护')
+        shutil.rmtree(MWUD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWUD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        code, out, err = bake('bake-instance', dict(REQ, instanceDir=INSTU, maintenance={'world': MWU, 'pregenRadius': 20}))
+        LU = launch_block(code, out, 'maintenance (1.12.2) non-ASCII names')
+        check('maintenance (1.12.2): non-ASCII world and instance folder bake, ASCII JVM arguments', code == 0 and LU and all(a.isascii() for a in LU['jvmArgs'] if a.startswith('-Damber.ul.maintenance')), f'{code} {out[-1:]}')
+        if LU:
+            cfu = LU['maintenance']['cancelFile']
+            def watch_u():
+                while True:
+                    time.sleep(0.5)
+                    try: pr_ = progress_of('maintenance-unicode')
+                    except Exception: continue
+                    if any(x.get('step') == 'pregen' and x['done'] >= 500 for x in pr_): open(cfu, 'w').close(); return
+                    if any(x.get('step') in ('done', 'quit', 'failed') for x in pr_): return
+            open(os.path.join(T, 'maintenance-unicode.log'), 'w').close()
+            threading.Thread(target=watch_u, daemon=True).start()
+            m, s = launch('maintenance-unicode', stop='never', timeout=1800, block=LU, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            rawl = [l.split('@amber-ul/progress ', 1)[1] for l in open(os.path.join(T, 'maintenance-unicode.log'), encoding='utf-8', errors='replace').read().splitlines() if '@amber-ul/progress {' in l]
+            pr = progress_of('maintenance-unicode')
+            check(f'maintenance (1.12.2): non-ASCII names: progress lines pure ASCII JSON with the right world name, cancel works ({m})', m.get('exit') == 0 and pr
+                  and all(l.isascii() for l in rawl) and all(x.get('world') == MWU for x in pr) and steps(pr, 'cancelled') and not os.path.exists(cfu), tail(pr))
+        shutil.rmtree(MWUD, ignore_errors=True)
+        # FML asks before it opens the world (here: a block registry entry no mod provides) and nobody answers: launchIntegratedServer
+        # waits on the client thread for the answer. After 60 s the run answers "no", fails with a problem line and the game quits.
+        MWQ = 'amber-mt-ask'; MWQD = os.path.join(GAME, 'saves', MWQ)
+        def ask_world():
+            shutil.rmtree(MWQD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWQD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json', 'level.dat_old'))
+            add_missing_block(os.path.join(MWQD, 'level.dat'))
+        ask_world()
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MWQ, 'pregenRadius': 0}))
+        LQ = launch_block(code, out, 'maintenance (1.12.2) FML question')
+        if LQ:
+            pfq = LQ['problemsFile']
+            t0 = time.time(); m, s = launch('maintenance-ask', stop='never', timeout=900, block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance-ask'); fl = steps(pr, 'failed')
+            probs_q = [json.loads(l) for l in open(pfq, encoding='utf-8') if l.strip()] if os.path.exists(pfq) else []
+            latest_ = open(os.path.join(GAME, 'logs', 'latest.log'), encoding='utf-8', errors='replace').read() if os.path.exists(os.path.join(GAME, 'logs', 'latest.log')) else ''
+            check(f'maintenance (1.12.2): FML asks about missing registry entries, nobody answers -> after 60 s failed + maintenance_failed problem, the game quits ({time.time() - t0:.0f} s, {m})',
+                  m.get('exit') == 0 and fl and 'FML is asking' in (fl[-1].get('message') or '') and not steps(pr, 'spawn') and steps(pr, 'quit')
+                  and any(x.get('code') == 'maintenance_failed' for x in probs_q) and 'amberfake:missing_block' in latest_, f'{tail(pr)} {fl[-1:]} {probs_q[-1:]} see {T}/maintenance-ask.log')
+            # the same question, and the launcher cancels while it is up: cancelled, the game quits, long before the 60 s
+            ask_world(); cfq = LQ['maintenance']['cancelFile']
+            def watch_q():
+                while True:
+                    time.sleep(0.5)
+                    try: pr_ = progress_of('maintenance-ask-cancel')
+                    except Exception: continue
+                    if any(x.get('step') == 'open' and x['done'] == 0 for x in pr_): time.sleep(15); open(cfq, 'w').close(); return
+                    if any(x.get('step') in ('done', 'quit', 'failed', 'cancelled') for x in pr_): return
+            open(os.path.join(T, 'maintenance-ask-cancel.log'), 'w').close()
+            threading.Thread(target=watch_q, daemon=True).start()
+            t0 = time.time(); m, s = launch('maintenance-ask-cancel', stop='never', timeout=900, block=LQ, extra=['-Damber.worldtest.open=false'], keep_world=True)
+            pr = progress_of('maintenance-ask-cancel'); op = steps(pr, 'open'); cn = steps(pr, 'cancelled')
+            check(f'maintenance (1.12.2): cancel while FML is asking -> cancelled while opening, the game quits ({time.time() - t0:.0f} s, {m})',
+                  m.get('exit') == 0 and cn and 'opening' in (cn[-1].get('message') or '') and not steps(pr, 'failed') and not steps(pr, 'spawn')
+                  and op and not any(x['done'] == 1 for x in op) and not os.path.exists(cfq), f'{tail(pr)} {cn[-1:]}')
+        shutil.rmtree(MWQD, ignore_errors=True)
+        # a failure (the progress file cannot be replaced) with the instance under the home folder: a stable reason and the
+        # file's role, no raw local path or user name in the progress lines or the problems file
+        MWF = 'amber-mt-fail'; MWFD = os.path.join(GAME, 'saves', MWF)
+        shutil.rmtree(MWFD, ignore_errors=True); shutil.copytree(os.path.join(GAME, 'saves', 'amber-worldtest'), MWFD, ignore=shutil.ignore_patterns('session.lock', 'amber-ul-pregen.json'))
+        os.makedirs(os.path.join(MWFD, 'amber-ul-pregen.json', 'x'))
+        code, out, err = bake('bake-instance', dict(REQ, maintenance={'world': MWF, 'pregenRadius': 0}))
+        LF = launch_block(code, out, 'maintenance (1.12.2) failure run')
+        if LF:
+            home = os.path.dirname(os.path.abspath(GAME)); user = os.path.basename(home)
+            m, s = launch('maintenance-fail', stop='never', timeout=900, block=LF, extra=['-Damber.worldtest.open=false', '-Duser.home=' + home, '-Duser.name=' + user], keep_world=True)
+            pr = progress_of('maintenance-fail'); fl = steps(pr, 'failed'); pff = LF['problemsFile']
+            probs = [l for l in open(pff, encoding='utf-8', errors='replace')] if os.path.exists(pff) else []
+            text = open(os.path.join(T, 'maintenance-fail.log'), encoding='utf-8', errors='replace').read()
+            mine = [l for l in text.splitlines() if '@amber-ul/' in l] + [l for l in probs if 'maintenance_failed' in l]
+            raw = [v.lower() for v in {os.path.abspath(GAME), os.path.abspath(GAME).replace(BS, '/'), home, home.replace(BS, '/')}]
+            leaked = [l for l in mine if any(v in l.lower() or v.replace(BS, BS + BS) in l.lower() for v in raw)]
+            check(f'maintenance (1.12.2): a failed save reports a stable reason and file role, no raw local path ({m})', m.get('exit') == 0 and fl
+                  and (fl[-1].get('message') or '').startswith('io_error (progress file)') and any('"reason":"io_error"' in l for l in probs) and not leaked, f'{tail(pr)} {fl[-1:]} {leaked[:2]}')
+        shutil.rmtree(MWFD, ignore_errors=True)
+        shutil.rmtree(cfg); shutil.copytree(cfg_keep, cfg)
+    else: check('maintenance (1.12.2): needs the warm run world', False)
 
 # refusals
 code, out, err = bake('bake-instance', dict(REQ, mods=[{'path': m} for m in mods if 'mixinbooter' not in os.path.basename(m).lower()]))   # UniversalTweaks requires mixinbooter
@@ -339,6 +547,17 @@ for qp, what in [({'singleplayer': 'no-such-world'}, 'missing world'), ({'single
                  ({'singleplayer': 'AMBER-WORLDTEST'}, 'folder name in another case'), ({'singleplayer': 'a\ud83d'}, 'an unpaired surrogate')]:
     code, out, err = bake('bake-instance', dict(REQ, quickPlay=qp))
     check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'quickPlay' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+# v1.3.3 maintenance refusals (bake only)
+import gzip, struct
+os.makedirs(os.path.join(GAME, 'saves', 'amber-mt-newer'), exist_ok=True)
+with gzip.open(os.path.join(GAME, 'saves', 'amber-mt-newer', 'level.dat'), 'wb') as f: f.write(b'\x0a\x00\x00\x0a\x00\x04Data\x03\x00\x0bDataVersion' + struct.pack('>i', 3955) + b'\x00\x00')
+for mt, extra, what in [({'world': 'amber-worldtest'}, {'quickPlay': {'singleplayer': 'amber-worldtest'}}, 'with quickPlay'), ({'world': 'amber-mt-newer'}, {}, 'a 1.21.1 world'),
+                        ({'world': 'no-such-world'}, {}, 'missing world'), ({'world': 'amber-worldtest', 'pregenRadius': 513}, {}, 'radius 513'),
+                        ({'world': '.'}, {}, 'world .'), ({'world': 'a/b'}, {}, 'world a/b'), ({'world': 'a' + chr(92) + 'b'}, {}, 'world with a backslash'), ({'world': ''}, {}, 'empty world'),
+                        ({'world': 'C:' + chr(92) + 'x'}, {}, 'absolute world path'), ({}, {}, 'no world'), (5, {}, 'not an object'), ({'world': 'amber-worldtest'}, {'side': 'server'}, 'side server')]:
+    code, out, err = bake('bake-instance', dict(REQ, maintenance=mt, **extra))
+    check(f'maintenance refused (1.12.2): {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' and 'aintenance' in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+shutil.rmtree(os.path.join(GAME, 'saves', 'amber-mt-newer'), ignore_errors=True)
 for extra, what in [({'side': 'server'}, 'side server'), ({'gameDir': None, 'instanceDir': 5}, 'instanceDir not a string')]:
     code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-worldtest'}, **extra))
     check(f'quickPlay refused: {what} -> bad_request', code == 1 and any(x.get('code') == 'bad_request' for x in out), f'{code} {out[-1:]}')

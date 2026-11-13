@@ -244,7 +244,8 @@ public final class Bake {
         if (plannedOnly(kind, rq.mc)) return 1;
         if (!PLATFORMS.getOrDefault(kind, List.of()).contains(rq.mc)) { problem("error", "incompatible_loader", null, null, null, "platform " + kind + " is not supported on Minecraft " + rq.mc + " (supported: " + PLATFORMS + ")"); return 1; }
         QuickPlay quick = QuickPlay.of(q, kind.equals(LegacyPlatform.KIND));   // v1.3.3: checked before anything is baked
-        if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf, quick);
+        Maintenance maint = Maintenance.of(q, rq.mc);   // v1.3.3
+        if (kind.equals(LegacyPlatform.KIND)) return LegacyPlatform.bakeInstance(q, pf, quick, maint);
         int javaMin = JAVA_MIN.get(kind);
         if (q.has("javaMajor") && q.get("javaMajor").getAsInt() < javaMin) { error("java_too_old", "the loader needs Java " + javaMin + " or newer for " + kind + " (request javaMajor " + q.get("javaMajor").getAsInt() + ")"); return 1; }
         Path installDir = kind.equals("vanilla") ? null : path(pf, "installDir");
@@ -310,6 +311,7 @@ public final class Bake {
         if (installDir != null) for (String x : List.of("--add-opens", "java.base/java.util.jar=ALL-UNNAMED", "--add-opens", "java.base/java.lang.invoke=ALL-UNNAMED",
                 "--add-exports", "java.base/sun.security.util=ALL-UNNAMED", "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=java.naming")) jvm.add(x);   // FML / securejarhandler
         if (kind.equals("forge") && !production) jvm.add("-Damber.forge.production=false");   // FMLLoader.isProduction(): true unless asked (dev only)
+        if (maint != null) { maint.jvmArgs(jvm); launch.add("maintenance", maint.json()); }   // v1.3.3: runtime.MaintenanceRun
         launch.add("jvmArgs", jvm);
         JsonArray pre = new JsonArray(); pre.add("--state"); pre.add(stateFile.toString()); pre.add("--");
         if (quick != null) { quick.modernArgs(pre); launch.add("quickPlay", quick.json("game")); }   // v1.3.3: the game's own --quickPlay*
@@ -572,7 +574,12 @@ public final class Bake {
         if (!q.get("schema").getAsString().equals(want)) throw new BadRequest("unknown schema " + q.get("schema").getAsString() + " (expected " + want + ")");
         return q;
     }
-    static String str(JsonObject q, String k) throws BadRequest { if (!q.has(k)) throw new BadRequest("missing field " + k); return q.get(k).getAsString(); }
+    /** A string field; null counts as missing, anything but a string or number is a bad request. */
+    static String str(JsonObject q, String k) throws BadRequest {
+        if (!q.has(k) || q.get(k).isJsonNull()) throw new BadRequest("missing field " + k);
+        if (!q.get(k).isJsonPrimitive()) throw new BadRequest("field " + k + " is not a string");
+        return q.get(k).getAsString();
+    }
     static Path path(JsonObject q, String k) throws BadRequest { return Path.of(str(q, k)); }
     static List<Path> paths(JsonObject q, String k) { List<Path> l = new ArrayList<>(); if (q.has(k)) for (JsonElement e : q.getAsJsonArray(k)) l.add(Path.of(e.getAsString())); return l; }
 

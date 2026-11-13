@@ -19,6 +19,7 @@ public final class GameHooks {
         if (clientStarted) return;
         clientStarted = true; gameInstance = minecraft;
         mark("Minecraft.<init> (main+client 入口点)"); listener.accept(Event.START_CLIENT);
+        MaintenanceRun.watch(minecraft);   // v1.3.3 maintenance mode: starts it if a replaced title screen never fires titleScreen()
     }
     /** Dedicated server Main, after Bootstrap. */
     public static synchronized void startServer() {
@@ -28,6 +29,7 @@ public final class GameHooks {
     public static synchronized void titleScreen() {
         if (titleSeen) return;
         titleSeen = true; mark("TitleScreen.init"); listener.accept(Event.TITLE_SCREEN);
+        if (MaintenanceRun.requested()) MaintenanceRun.start(gameInstance);   // v1.3.3 maintenance mode
     }
     /** v1.3.3 quick play: the title screen is skipped; QuickPlay.join*World is the same moment (first reload done). */
     public static synchronized void quickPlay() {
