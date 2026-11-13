@@ -12,6 +12,18 @@ public final class LegacyLaunchTest {
 
     public static void main(String[] a) {
         check("running on Java 8", "1.8".equals(System.getProperty("java.specification.version")));
+        { // maintenance sliding window: index() is the inverse of the spiral, ring() its ring, release() after every neighbour
+            LegacyMaintenance.Spiral sp = new LegacyMaintenance.Spiral(); boolean inv = true, rings = true;
+            for (long i = 0; i < 20000; i++) { int[] d = sp.next(); inv &= LegacyMaintenance.Job.index(d[0], d[1]) == i; rings &= LegacyMaintenance.Job.ring(i) == Math.max(Math.abs(d[0]), Math.abs(d[1])); }
+            check("maintenance: spiral index() inverts Spiral.next() and ring() matches (20000 positions)", inv && rings);
+            boolean rel = true;
+            for (int x = -30; x <= 30; x++) for (int z = -30; z <= 30; z++) {
+                long r = LegacyMaintenance.Job.release(x, z);
+                for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) rel &= LegacyMaintenance.Job.index(x + i, z + j) < r;
+                rel &= r > LegacyMaintenance.Job.index(x, z);
+            }
+            check("maintenance: release() comes after every neighbour", rel);
+        }
         check("javaMajor 1.8", LegacyLaunch.javaMajor("1.8") == 8);
         check("javaMajor 17", LegacyLaunch.javaMajor("17") == 17);
         check("javaMajor 21.0.2", LegacyLaunch.javaMajor("21.0.2") == 21);

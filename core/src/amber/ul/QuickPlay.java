@@ -34,7 +34,7 @@ final class QuickPlay {
         JsonObject o = q.getAsJsonObject("quickPlay");
         boolean sp = o.has("singleplayer"), mp = o.has("multiplayer");
         if (sp == mp || o.size() != 1) throw new Bake.BadRequest("quickPlay needs exactly one of singleplayer / multiplayer");
-        if (q.has("side") && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("quickPlay starts the game client: side must be client");
+        if (q.has("side") && !q.get("side").isJsonNull() && !(q.get("side").isJsonPrimitive() && "client".equals(q.get("side").getAsString()))) throw new Bake.BadRequest("quickPlay starts the game client: side must be client");
         if (sp) {
             String w = string(o, "singleplayer");
             worldName(w);

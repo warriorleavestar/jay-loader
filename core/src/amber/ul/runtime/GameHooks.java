@@ -19,6 +19,7 @@ public final class GameHooks {
         if (clientStarted) return;
         clientStarted = true; gameInstance = minecraft;
         mark("Minecraft.<init> (main+client 入口点)"); listener.accept(Event.START_CLIENT);
+        MaintenanceRun.watch(minecraft);   // v1.3.3 maintenance mode: starts it if a replaced title screen never fires titleScreen()
     }
     /** Dedicated server Main, after Bootstrap. */
     public static synchronized void startServer() {
