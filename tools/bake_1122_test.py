@@ -343,29 +343,42 @@ for qp, what in [({'singleplayer': 'no-such-world'}, 'missing world'), ({'single
 for extra, what, msg in [({'side': 'server'}, 'side server', 'side must be client'), ({'gameDir': None, 'instanceDir': 5}, 'instanceDir not a string', 'instanceDir must be a string')]:
     code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-worldtest'}, **extra))
     check(f'quickPlay refused: {what} -> bad_request "{msg}"', code == 1 and any(x.get('code') == 'bad_request' and msg in x.get('message', '') for x in out), f'{code} {out[-1:]}')
+# the quick play folder checks need only a level.dat: fixture worlds made here (no game run needed, works with --no-launch)
+def fixture_world(d, name='Fixture'):
+    import gzip, struct
+    os.makedirs(d, exist_ok=True); nb = name.encode('ascii')
+    with gzip.open(os.path.join(d, 'level.dat'), 'wb') as f:
+        f.write(b'\x0a\x00\x00' + b'\x0a\x00\x04Data' + b'\x03\x00\x0bDataVersion' + struct.pack('>i', 1343)
+                + b'\x08\x00\x09LevelName' + struct.pack('>H', len(nb)) + nb + b'\x00\x00')
 # "gameDir": null is no gameDir: the saves folder is under instanceDir (a world only there is found, one only in GAME is not)
-IW = os.path.join(INSTD, 'saves', 'amber-qp-instdir')
-WT = os.path.join(GAME, 'saves', 'amber-worldtest', 'level.dat')
-if os.path.exists(WT): os.makedirs(IW, exist_ok=True); shutil.copy(WT, os.path.join(IW, 'level.dat'))
-else: check('quickPlay: "gameDir": null test needs the world test save (amber-worldtest has no level.dat)', False, WT)
-if os.path.exists(os.path.join(IW, 'level.dat')):
+IW = os.path.join(INSTD, 'saves', 'amber-qp-instdir'); GW = os.path.join(GAME, 'saves', 'amber-qp-gameonly')
+fixture_world(IW); fixture_world(GW)
+try:
     code, out, err = bake('bake-instance', dict(REQ, gameDir=None, quickPlay={'singleplayer': 'amber-qp-instdir'}))
     rq = next((x for x in out if x['type'] == 'result'), None)
-    code2, out2, err2 = bake('bake-instance', dict(REQ, gameDir=None, quickPlay={'singleplayer': 'amber-worldtest'}))
+    code2, out2, err2 = bake('bake-instance', dict(REQ, gameDir=None, quickPlay={'singleplayer': 'amber-qp-gameonly'}))
     check('quickPlay: "gameDir": null counts as no gameDir (world found under instanceDir/saves, not under the game dir)', code == 0 and rq and rq['launch'].get('quickPlay', {}).get('singleplayer') == 'amber-qp-instdir'
           and code2 == 1 and any(x.get('code') == 'bad_request' and os.path.normcase(os.path.join(INSTD, 'saves')) in os.path.normcase(x.get('message', '')) for x in out2), f'{code} {out[-1:]} {code2} {out2[-1:]}')
-shutil.rmtree(IW, ignore_errors=True)
-# a world folder that is a junction (Windows) or symlink: its own name under saves/ counts, not its target's
+finally: shutil.rmtree(IW, ignore_errors=True)
+# a world folder that is a junction (Windows): its own name under saves/ counts, not its target's; near names are refused
+# with the name on disk (case; the system's own aliases such as a trailing dot), never 'null'
 JW = os.path.normpath(os.path.join(GAME, 'saves', 'amber-qp-junction'))
-if os.name == 'nt' and os.path.lexists(JW): os.rmdir(JW)   # a junction left by a run that stopped early (rmdir removes the link only)
-if os.path.exists(WT) and os.name == 'nt':
-    subprocess.run(['cmd', '/c', 'mklink', '/J', JW, os.path.normpath(os.path.join(GAME, 'saves', 'amber-worldtest'))], capture_output=True)
+if os.name == 'nt':
+    if os.path.lexists(JW): os.rmdir(JW)   # a junction left by a run that stopped early (rmdir removes the link only)
+    subprocess.run(['cmd', '/c', 'mklink', '/J', JW, os.path.normpath(GW)], capture_output=True)
     if not os.path.isdir(JW): check('quickPlay: a junction world folder (mklink /J failed)', False)
     else:
         try:
             code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': 'amber-qp-junction'}))
             check('quickPlay: a world folder that is a junction is accepted under its own name', code == 0 and any(x['type'] == 'result' for x in out), f'{code} {out[-1:]}')
+            for asked, want, what in [('AMBER-QP-JUNCTION', "named 'amber-qp-junction'", 'the junction in another case'),
+                                      ('amber-qp-gameonly.', "named 'amber-qp-gameonly'", 'a trailing dot (Windows finds the folder without it)')]:
+                code, out, err = bake('bake-instance', dict(REQ, quickPlay={'singleplayer': asked}))
+                msg = next((x.get('message', '') for x in out if x.get('code') == 'bad_request'), '')
+                check(f'quickPlay refused: {what} -> bad_request with the name on disk', code == 1 and want in msg and "'null'" not in msg, f'{code} {msg!r}')
         finally: os.rmdir(JW)   # removes the junction only
+else: print('SKIP quickPlay junction and Windows name alias checks: Windows only')
+shutil.rmtree(GW, ignore_errors=True)
 # "gameDir": null is the same as no gameDir for the rest of the bake too: stateKey, launch block and where the state is written
 same = []
 for gd in ('absent', None, GAME):

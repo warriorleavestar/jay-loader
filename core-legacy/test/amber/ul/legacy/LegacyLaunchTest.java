@@ -8,10 +8,30 @@ import java.util.Arrays;
  */
 public final class LegacyLaunchTest {
     static int pass, fail;
+    /** LegacyQuickPlay.openWorld on stub game objects: its refusal, or the message of what it threw. */
+    static String openStub(Object saves) {
+        try { return LegacyQuickPlay.openWorld(new StubMc(saves), StubMc.class, "w"); }
+        catch (Throwable e) {
+            Throwable c = e instanceof java.lang.reflect.InvocationTargetException && e.getCause() != null ? e.getCause() : e;
+            return c instanceof ClassNotFoundException ? "ClassNotFoundException " + c.getMessage() : c.getMessage();
+        }
+    }
+    public static final class StubMc { final Object saves; StubMc(Object s) { saves = s; } public Object func_71359_d() { return saves; } public Object field_71462_r; }
+    public static final class StubSummary { public String func_75786_a() { return "w"; } public boolean func_186356_m() { return false; } }
+    public static class SavesMissing { public java.util.List<Object> func_75799_b() { return java.util.Arrays.<Object>asList(new StubSummary()); } }
+    public static final class SavesFalse extends SavesMissing { public boolean func_90033_f(String f) { return false; } }
+    public static final class SavesTrue extends SavesMissing { public boolean func_90033_f(String f) { return true; } }
+    public static final class SavesThrows extends SavesMissing { public boolean func_90033_f(String f) { throw new IllegalStateException("boom"); } }
     static void check(String name, boolean ok) { if (ok) pass++; else fail++; System.out.println((ok ? "  ok   " : "  FAIL ") + name); }
 
     public static void main(String[] a) {
         check("running on Java 8", "1.8".equals(System.getProperty("java.specification.version")));
+        // quick play: the world list's canLoadWorld check (SaveFormatOld.func_90033_f) must stop the open when it is missing,
+        // false or throws; FML's loader is never reached (in this test it would be a ClassNotFoundException for GuiWorldSelection)
+        check("quickPlay: canLoadWorld false -> refused", "the game cannot load it (canLoadWorld false)".equals(openStub(new SavesFalse())));
+        check("quickPlay: canLoadWorld throws -> that error, FML not reached", "boom".equals(openStub(new SavesThrows())));
+        check("quickPlay: canLoadWorld missing -> error, FML not reached", String.valueOf(openStub(new SavesMissing())).contains("func_90033_f"));
+        check("quickPlay: canLoadWorld true -> goes on to FML's loader", String.valueOf(openStub(new SavesTrue())).contains("ClassNotFoundException"));
         check("javaMajor 1.8", LegacyLaunch.javaMajor("1.8") == 8);
         check("javaMajor 17", LegacyLaunch.javaMajor("17") == 17);
         check("javaMajor 21.0.2", LegacyLaunch.javaMajor("21.0.2") == 21);

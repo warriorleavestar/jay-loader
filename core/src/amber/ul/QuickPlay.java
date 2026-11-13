@@ -93,7 +93,7 @@ final class QuickPlay {
                 if (n.equals(w)) { exact = true; break; }
                 if (nfc(n).equalsIgnoreCase(wn)) near = n;   // case and Unicode form, also both at once
             }
-        } catch (java.io.IOException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }
+        } catch (java.io.IOException | java.nio.file.DirectoryIteratorException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }   // the iterator wraps a read error
         if (!exact && near == null)   // the system found it under another name (Windows: a trailing dot or space, an 8.3 short name)
             try { near = dir.toRealPath().getFileName().toString(); } catch (java.io.IOException | RuntimeException e) { near = null; }
         if (!exact) throw new Bake.BadRequest(what + " world '" + w + "' not found: " + (near != null && !near.equals(w) ? "the folder on disk is named '" + near + "'" : "no folder in " + saves + " is named exactly '" + w + "'")
