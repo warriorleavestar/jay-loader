@@ -78,17 +78,30 @@ final class QuickPlay {
     /**
      * The world folder &lt;gameDir&gt;/saves/&lt;w&gt;, which must hold a level.dat and be named exactly w on disk: the game
      * matches folder names exactly, while Windows (case) and macOS (Unicode normalization) would also find a near match.
+     * The name is checked on the saves/ entry itself, so a junction or symbolic link there is accepted.
      */
     static Path worldDir(JsonObject q, String w, String what) throws Bake.BadRequest {
         Path saves = gameDir(q).resolve("saves"), dir;
         try { dir = saves.resolve(w); }
         catch (InvalidPathException e) { throw new Bake.BadRequest(what + " world '" + w + "' is not a usable folder name on this system: " + e.getMessage()); }
         if (!Files.isRegularFile(dir.resolve("level.dat"))) throw new Bake.BadRequest(what + " world '" + w + "' not found: no level.dat in " + dir);
-        String real;
-        try { real = dir.toRealPath().getFileName().toString(); } catch (java.io.IOException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }
-        if (!real.equals(w)) throw new Bake.BadRequest(what + " world '" + w + "' not found: the folder on disk is named '" + real + "' (names must match exactly, case and Unicode form included)");
+        // the entry's own name in saves/ (not toRealPath: a junction or symlink as saves/<w> would give its target's name)
+        String near = null, wn = nfc(w); boolean exact = false;
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(saves)) {
+            for (Path p : ds) {
+                String n = p.getFileName().toString();
+                if (n.equals(w)) { exact = true; break; }
+                if (nfc(n).equalsIgnoreCase(wn)) near = n;   // case and Unicode form, also both at once
+            }
+        } catch (java.io.IOException | java.nio.file.DirectoryIteratorException e) { throw new Bake.BadRequest(what + " world '" + w + "': " + e); }   // the iterator wraps a read error
+        if (!exact && near == null)   // the system found it under another name (Windows: a trailing dot or space, an 8.3 short name)
+            try { near = dir.toRealPath().getFileName().toString(); } catch (java.io.IOException | RuntimeException e) { near = null; }
+        if (!exact) throw new Bake.BadRequest(what + " world '" + w + "' not found: " + (near != null && !near.equals(w) ? "the folder on disk is named '" + near + "'" : "no folder in " + saves + " is named exactly '" + w + "'")
+                + " (names must match exactly, case and Unicode form included)");
         return dir;
     }
+
+    static String nfc(String s) { return java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFC); }
 
     /** A save folder name: one path segment, as the game's world list would show it. */
     static void worldName(String w) throws Bake.BadRequest {

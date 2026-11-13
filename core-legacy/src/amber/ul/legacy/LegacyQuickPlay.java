@@ -108,9 +108,7 @@ public final class LegacyQuickPlay {
         // the world list's own checks before it loads a world (GuiListWorldSelectionEntry.joinWorld / loadWorld)
         if (Boolean.TRUE.equals(method(summary.getClass(), "func_186356_m", 0).invoke(summary)))   // askToOpenWorld
             return "the game asks before opening it (saved by a newer or snapshot version); open it from the world list";
-        Method canLoad = null;
-        for (Method m : saves.getClass().getMethods()) if (m.getName().equals("func_90033_f") && m.getParameterCount() == 1) canLoad = m;   // canLoadWorld
-        if (canLoad != null && !Boolean.TRUE.equals(canLoad.invoke(saves, folder))) return "the game cannot load it (canLoadWorld false)";
+        if (!Boolean.TRUE.equals(method(saves.getClass(), "func_90033_f", 1).invoke(saves, folder))) return "the game cannot load it (canLoadWorld false)";   // canLoadWorld
         Class<?> selCls = Class.forName("net.minecraft.client.gui.GuiWorldSelection", true, cl), screenCls = Class.forName("net.minecraft.client.gui.GuiScreen", false, cl);
         Object sel = selCls.getConstructor(screenCls).newInstance(field(mc, "field_71462_r"));
         Class<?> fml = Class.forName("net.minecraftforge.fml.client.FMLClientHandler", true, cl);
