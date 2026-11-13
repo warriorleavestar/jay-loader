@@ -67,7 +67,7 @@ def launch(label, res, ver, mcv, gamedir, marker, extra_largs, extra_jvm, timeou
     L = res['launch']
     game = ['--username', 'AmberTest', '--version', mcv, '--gameDir', gamedir, '--assetsDir', f'{MC}/assets', '--assetIndex', ver['assetIndex']['id'],
             '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--versionType', 'release']
-    jvm = ['-Xmx3G', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
+    jvm = ['-Xmx3G', '-Dstdout.encoding=UTF-8', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
            f'-Dorg.lwjgl.system.SharedLibraryExtractPath={MC}/natives', f'-Djna.tmpdir={MC}/natives'] + extra_jvm
     cmd = [JAVA] + L['jvmArgs'] + jvm + ['-cp', ';'.join(L['classpath']), L['mainClass']] + extra_largs + L['gameArgsPrefix'] + game
     os.makedirs(gamedir, exist_ok=True); log = open(f'{T}/{label}.log', 'w', encoding='utf-8')
@@ -290,7 +290,7 @@ def run_maint(label, res, ver, mcv, gamedir, cancel_when=None, timeout=1800, ext
     L = res['launch']
     game = ['--username', 'AmberTest', '--version', mcv, '--gameDir', gamedir, '--assetsDir', f'{MC}/assets', '--assetIndex', ver['assetIndex']['id'],
             '--uuid', '00000000000000000000000000000001', '--accessToken', '0', '--userType', 'legacy', '--versionType', 'release']
-    jvm = ['-Xmx3G', '-Dstdout.encoding=UTF-8', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
+    jvm = ['-Xmx3G', '-Dfile.encoding=UTF-8', f'-Dlog4j.configurationFile=file:///{MC}/log4j2-amber.xml',
            f'-Dorg.lwjgl.system.SharedLibraryExtractPath={MC}/natives', f'-Djna.tmpdir={MC}/natives']
     cmd = [JAVA] + L['jvmArgs'] + jvm + list(extra) + ['-cp', ';'.join(L['classpath']), L['mainClass']] + L['gameArgsPrefix'] + game
     log = open(f'{T}/{label}.log', 'w', encoding='utf-8'); prog = []; cancelled = []
