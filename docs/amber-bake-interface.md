@@ -112,7 +112,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 - Every write goes to a temp file first and is then renamed atomically, so a killed process never leaves a corrupt cache.
 - `amber.ul.Bake version` prints (the 0.4.0 package, verbatim):
   ```
-  {"type":"result","schema":"amber-ul/version-result@1","loaderVersion":"0.4.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3","interfaceRevision":"1.3.2",
+  {"type":"result","schema":"amber-ul/version-result@1","loaderVersion":"0.5.0","pipelineVersion":"ul-proto-9","protocol":1,"interface":"1.3","interfaceRevision":"1.3.3",
    "supportedMc":["1.12.2","1.20.1","1.21.1"],
    "platforms":{"vanilla":["1.21.1"],"neoforge":["1.21.1"],"forge":["1.20.1"],"forge-1.12.2":["1.12.2"]},
    "mappingCache":{"composer":"amber-map-1","keyFormat":"amber-tablekey/1"},
@@ -214,7 +214,7 @@ Jay plans to run the game in a sandbox that can write only the instance director
 `python -I tools/package.py` (after `bash build.sh`) writes `build/dist/amber-ul-<loaderVersion>/` and `build/dist/amber-ul-<loaderVersion>.zip` (the same folder, one top-level directory, fixed timestamps):
 
 ```
-amber-ul-0.4.0/
+amber-ul-0.5.0/
   loader.jar          the loader
   libs/*.jar          its libraries (unmodified official jars; manifest.libs gives Maven coordinates + url)
   bridges/            fmlbridge.jar, fabricbridge.jar (NeoForge 1.21.1), fmlbridge-forge.jar, fabricbridge-forge.jar
@@ -275,7 +275,7 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - Runtime problems: the launch block passes `-Damber.ul.problemsFile` (also `launch.problemsFile`) and `-Damber.ul.loaderVersion`; `LegacyLaunch` writes the usual launch line and `@amber-ul/problem` lines for what fails before the game takes over: `legacy_java_unsupported` (error; `javaVersion`, `required`), `legacy_launchwrapper_missing` (error), `legacy_launch_failed` (error; `exception`, `rootCause`?, `log`; when LaunchWrapper itself caught the failure the cause is only in `logs/latest.log`), `legacy_cache_disabled` (warning; `cacheDir`; the launch goes on without the cache). Later failures are FML's own crash reports. Java 8 writes stdout in the platform code page, so `@amber-ul/problem` lines (and the problems file) are pure ASCII: anything outside 0x20-0x7E is a JSON `\uXXXX` escape.
 - Package: `manifest.json` carries `javaLaunch`; `bridges/fmlbridge-1.12.2.jar` is the core-legacy runtime, Java 8 bytecode throughout (checked when packaging).
 
-## v1.3.3: quick play (additive)
+## v1.3.3: quick play (additive, loader 0.5.0)
 
 `version` reports `"interfaceRevision":"1.3.3"`. A launcher that does not send the new field gets exactly the v1.3.2 behaviour, byte for byte. A loader older than 1.3.3 ignores an unknown `quickPlay`. A launcher should therefore treat quick play as in effect only when `interfaceRevision` is 1.3.3 or later **and** the result has `launch.quickPlay`.
 
@@ -312,7 +312,7 @@ For Amber: verify every `files` entry, run the stages with `-cp` = `classpath` r
 - A launch block made with `quickPlay` is for that quick play. A launcher that caches launch blocks must not reuse it for a plain launch, or the reverse.
 - Everything runs inside the normal game client (its integrated server for singleplayer). Nothing is written by the bake. The game writes only its own files in `gameDir`.
 
-## v1.3.3: maintenance mode (additive)
+## v1.3.3: maintenance mode (additive, loader 0.5.0)
 
 A launch of the normal game client that prepares one singleplayer world and then quits by itself. It never starts a dedicated server and never reads or writes `eula.txt`.
 
